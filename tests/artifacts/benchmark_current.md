@@ -6,7 +6,7 @@
 
 | System | Hit@k | Exact support | Mean tokens | Median tokens | p95 tokens |
 |--------|-------|---------------|-------------|---------------|------------|
-| waggle | 88% | 82% | 37.6 | 38.0 | 42.0 |
+| waggle | 92% | 88% | 37.2 | 38.0 | 42.0 |
 | rag_naive | 100% | 100% | 152.1 | 154.0 | 163.0 |
 
 ## Failure Protocol

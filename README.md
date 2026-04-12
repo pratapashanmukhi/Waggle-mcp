@@ -268,15 +268,20 @@ The LLM assigns low confidence (`confidence < 0.5`) to ambiguous input; Waggle *
 
 Corpus: 22 node pairs — 11 true duplicates (synonym, paraphrase, domain equivalence) and 11 false friends (same technology category, different technology). Source: `benchmarks/fixtures/dedup_cases.json`.
 
-The pipeline runs four layers:
-1. **Entity-key hard block** — if both nodes name *different* technologies in the *same* category (e.g. `postgresql` vs `mysql`), merge is blocked unconditionally.
-2. **Exact string match** — normalized content or label equality.
-3. **Substring containment** — one sentence is a strict subset of the other.
-4. **Semantic similarity** — cosine via `all-MiniLM-L6-v2`, with type-aware thresholds (`decision` 0.82 → `entity` 0.97) and a Jaccard-boosted path.
+The pipeline runs five layers:
+1. **Layer 0 — Entity-key hard block** — if both nodes name *different* technologies in the *same* category (e.g. `postgresql` vs `mysql`), merge is blocked unconditionally.
+2. **Layer 0b — Numeric-conflict guard** — same entity but *different critical numbers* (e.g. `jwt` 15 min vs 1 hr) → block. Guards against merging distinct facts that share a technology but differ on a key value.
+3. **Layer 1 — Exact string match** — normalized content or label equality.
+4. **Layer 2 — Substring containment** — one sentence is a strict subset of the other.
+5. **Layer 3 — Semantic similarity** — cosine via `all-MiniLM-L6-v2`:
+   - Same-entity aggressive path: if both reference the **same** entity token, merge at cosine ≥ 0.60 (catches paraphrase true-dups like "fastapi was chosen" / "we chose fastapi because async")
+   - Type-aware threshold: `decision`/`preference` → 0.82; `fact` → 0.92; `entity` → 0.97
+   - Jaccard-boosted path: word overlap ≥ 0.35 AND cosine ≥ (type threshold − 0.05)
+   - Conservative global fallback
 
-Best measured: **12/22 = 55%** at threshold 0.82.
+Best measured: **18/22 = 82%** at threshold 0.82. **fp=0 across all thresholds** — no false-friend merges at any tested threshold.
 
-The 55% ceiling is a known limitation: sentence-level cosine cannot reliably separate paraphrase true-dups from structural false-friends ("We decided on PostgreSQL" vs "We decided on MySQL" embed similarly). Planned next steps: entity-key extraction as a merge gate, bi-encoder fine-tuning on domain-specific pairs.
+The remaining 4 false-negatives are pure-paraphrase pairs with no recognisable entity anchor ("user prefers dark mode" / "user wants dark mode UI", "async non-negotiable" / "concurrent without blocking"). These require either semantic similarity fine-tuning or a learned paraphrase classifier to close.
 
 Full threshold sweep and detailed methodology: [`tests/artifacts/README.md`](./tests/artifacts/README.md).
 

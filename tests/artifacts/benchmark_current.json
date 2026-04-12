@@ -37,18 +37,18 @@
     {
       "metric": "deduplication",
       "backend": "semantic-dedup",
-      "passed": 12,
+      "passed": 18,
       "total": 22,
-      "accuracy": 0.5454545454545454,
+      "accuracy": 0.8181818181818182,
       "case_count": 22,
       "metadata": {
         "threshold": 0.82,
         "positive_cases": 11,
         "negative_cases": 11,
-        "true_positives": 2,
-        "true_negatives": 10,
-        "false_positives": 1,
-        "false_negatives": 9
+        "true_positives": 7,
+        "true_negatives": 11,
+        "false_positives": 0,
+        "false_negatives": 4
       }
     }
   ],
@@ -57,120 +57,120 @@
     {
       "metric": "deduplication",
       "backend": "semantic-dedup",
-      "passed": 12,
+      "passed": 18,
       "total": 22,
-      "accuracy": 0.5454545454545454,
+      "accuracy": 0.8181818181818182,
       "case_count": 22,
       "metadata": {
         "threshold": 0.82,
         "positive_cases": 11,
         "negative_cases": 11,
-        "true_positives": 2,
-        "true_negatives": 10,
-        "false_positives": 1,
-        "false_negatives": 9
+        "true_positives": 7,
+        "true_negatives": 11,
+        "false_positives": 0,
+        "false_negatives": 4
       }
     },
     {
       "metric": "deduplication",
       "backend": "semantic-dedup",
-      "passed": 11,
+      "passed": 17,
       "total": 22,
-      "accuracy": 0.5,
+      "accuracy": 0.7727272727272727,
       "case_count": 22,
       "metadata": {
         "threshold": 0.85,
         "positive_cases": 11,
         "negative_cases": 11,
-        "true_positives": 1,
-        "true_negatives": 10,
-        "false_positives": 1,
-        "false_negatives": 10
+        "true_positives": 6,
+        "true_negatives": 11,
+        "false_positives": 0,
+        "false_negatives": 5
       }
     },
     {
       "metric": "deduplication",
       "backend": "semantic-dedup",
-      "passed": 11,
+      "passed": 17,
       "total": 22,
-      "accuracy": 0.5,
+      "accuracy": 0.7727272727272727,
       "case_count": 22,
       "metadata": {
         "threshold": 0.88,
         "positive_cases": 11,
         "negative_cases": 11,
-        "true_positives": 1,
-        "true_negatives": 10,
-        "false_positives": 1,
-        "false_negatives": 10
+        "true_positives": 6,
+        "true_negatives": 11,
+        "false_positives": 0,
+        "false_negatives": 5
       }
     },
     {
       "metric": "deduplication",
       "backend": "semantic-dedup",
-      "passed": 10,
+      "passed": 17,
       "total": 22,
-      "accuracy": 0.45454545454545453,
+      "accuracy": 0.7727272727272727,
       "case_count": 22,
       "metadata": {
         "threshold": 0.9,
         "positive_cases": 11,
         "negative_cases": 11,
-        "true_positives": 0,
-        "true_negatives": 10,
-        "false_positives": 1,
-        "false_negatives": 11
+        "true_positives": 6,
+        "true_negatives": 11,
+        "false_positives": 0,
+        "false_negatives": 5
       }
     },
     {
       "metric": "deduplication",
       "backend": "semantic-dedup",
-      "passed": 10,
+      "passed": 17,
       "total": 22,
-      "accuracy": 0.45454545454545453,
+      "accuracy": 0.7727272727272727,
       "case_count": 22,
       "metadata": {
         "threshold": 0.92,
         "positive_cases": 11,
         "negative_cases": 11,
-        "true_positives": 0,
-        "true_negatives": 10,
-        "false_positives": 1,
-        "false_negatives": 11
+        "true_positives": 6,
+        "true_negatives": 11,
+        "false_positives": 0,
+        "false_negatives": 5
       }
     },
     {
       "metric": "deduplication",
       "backend": "semantic-dedup",
-      "passed": 10,
+      "passed": 17,
       "total": 22,
-      "accuracy": 0.45454545454545453,
+      "accuracy": 0.7727272727272727,
       "case_count": 22,
       "metadata": {
         "threshold": 0.95,
         "positive_cases": 11,
         "negative_cases": 11,
-        "true_positives": 0,
-        "true_negatives": 10,
-        "false_positives": 1,
-        "false_negatives": 11
+        "true_positives": 6,
+        "true_negatives": 11,
+        "false_positives": 0,
+        "false_negatives": 5
       }
     },
     {
       "metric": "deduplication",
       "backend": "semantic-dedup",
-      "passed": 10,
+      "passed": 17,
       "total": 22,
-      "accuracy": 0.45454545454545453,
+      "accuracy": 0.7727272727272727,
       "case_count": 22,
       "metadata": {
         "threshold": 0.97,
         "positive_cases": 11,
         "negative_cases": 11,
-        "true_positives": 0,
-        "true_negatives": 10,
-        "false_positives": 1,
-        "false_negatives": 11
+        "true_positives": 6,
+        "true_negatives": 11,
+        "false_positives": 0,
+        "false_negatives": 5
       }
     }
   ],
@@ -188,10 +188,10 @@
     "systems": {
       "waggle": {
         "case_count": 50,
-        "hit_at_k": 0.88,
-        "exact_support": 0.82,
+        "hit_at_k": 0.92,
+        "exact_support": 0.88,
         "context_tokens": {
-          "mean": 37.58,
+          "mean": 37.18,
           "median": 38.0,
           "p95": 42.0
         },
@@ -204,17 +204,17 @@
           "multi_session_change": {
             "case_count": 11,
             "hit_at_k": 0.9090909090909091,
-            "exact_support": 0.6363636363636364
+            "exact_support": 0.7272727272727273
           },
           "temporal_latest": {
             "case_count": 2,
-            "hit_at_k": 0.0,
-            "exact_support": 0.0
+            "hit_at_k": 0.5,
+            "exact_support": 0.5
           },
           "temporal_original": {
             "case_count": 19,
-            "hit_at_k": 0.8421052631578947,
-            "exact_support": 0.8421052631578947
+            "hit_at_k": 0.8947368421052632,
+            "exact_support": 0.8947368421052632
           }
         },
         "parameters": {
@@ -312,12 +312,12 @@
         "query_id": "q04",
         "system": "waggle",
         "task_family": "temporal_latest",
-        "hit_at_k": false,
-        "exact_support": false,
-        "context_tokens": 30,
+        "hit_at_k": true,
+        "exact_support": true,
+        "context_tokens": 29,
         "retrieved_ids": [
-          "auth_jwt_15m",
-          "retention_logs_30d"
+          "auth_jwt_1h",
+          "auth_jwt_15m"
         ],
         "gold_support_ids": [
           "auth_jwt_1h"
@@ -327,12 +327,12 @@
         "query_id": "q05",
         "system": "waggle",
         "task_family": "temporal_original",
-        "hit_at_k": false,
-        "exact_support": false,
-        "context_tokens": 36,
+        "hit_at_k": true,
+        "exact_support": true,
+        "context_tokens": 30,
         "retrieved_ids": [
           "db_sqlite_local",
-          "cache_redis_sessions"
+          "auth_jwt_15m"
         ],
         "gold_support_ids": [
           "auth_jwt_15m"
@@ -343,11 +343,11 @@
         "system": "waggle",
         "task_family": "multi_session_change",
         "hit_at_k": true,
-        "exact_support": false,
-        "context_tokens": 30,
+        "exact_support": true,
+        "context_tokens": 29,
         "retrieved_ids": [
-          "auth_jwt_15m",
-          "retention_logs_30d"
+          "auth_jwt_1h",
+          "auth_jwt_15m"
         ],
         "gold_support_ids": [
           "auth_jwt_15m",
@@ -362,8 +362,8 @@
         "exact_support": true,
         "context_tokens": 41,
         "retrieved_ids": [
-          "cache_redis_sessions",
-          "cache_keydb_sessions"
+          "cache_keydb_sessions",
+          "cache_redis_sessions"
         ],
         "gold_support_ids": [
           "cache_keydb_sessions"
@@ -377,8 +377,8 @@
         "exact_support": true,
         "context_tokens": 41,
         "retrieved_ids": [
-          "cache_redis_sessions",
-          "cache_keydb_sessions"
+          "cache_keydb_sessions",
+          "cache_redis_sessions"
         ],
         "gold_support_ids": [
           "cache_redis_sessions"
@@ -392,8 +392,8 @@
         "exact_support": true,
         "context_tokens": 41,
         "retrieved_ids": [
-          "cache_redis_sessions",
-          "cache_keydb_sessions"
+          "cache_keydb_sessions",
+          "cache_redis_sessions"
         ],
         "gold_support_ids": [
           "cache_redis_sessions",
@@ -651,10 +651,10 @@
         "task_family": "temporal_original",
         "hit_at_k": false,
         "exact_support": false,
-        "context_tokens": 36,
+        "context_tokens": 30,
         "retrieved_ids": [
           "db_sqlite_local",
-          "cache_redis_sessions"
+          "auth_jwt_15m"
         ],
         "gold_support_ids": [
           "deploy_ecs"
@@ -881,8 +881,8 @@
         "exact_support": true,
         "context_tokens": 33,
         "retrieved_ids": [
-          "retention_logs_30d",
-          "retention_audit_90d"
+          "retention_audit_90d",
+          "retention_logs_30d"
         ],
         "gold_support_ids": [
           "retention_logs_30d"
@@ -939,10 +939,10 @@
         "task_family": "temporal_original",
         "hit_at_k": false,
         "exact_support": false,
-        "context_tokens": 36,
+        "context_tokens": 30,
         "retrieved_ids": [
           "db_sqlite_local",
-          "cache_redis_sessions"
+          "auth_jwt_15m"
         ],
         "gold_support_ids": [
           "schema_manual"

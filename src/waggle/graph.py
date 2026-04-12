@@ -18,6 +18,7 @@ from waggle.errors import AuthenticationError, ValidationFailure
 from waggle.extractor import EXTRACT_BACKEND, extract_with_llm
 from waggle.intelligence import (
     compatible_node_types,
+    contains_conflicting_numbers,
     content_token_jaccard,
     detect_conflict_reason,
     extract_choice_entity,
@@ -1164,6 +1165,17 @@ class MemoryGraph:
             ):
                 continue  # never merge "postgres" node with "mysql" node
 
+            # ── Layer 0b: numeric-conflict guard ───────────────────────
+            # Same entity BUT different critical number (e.g. JWT 15min vs 1hr).
+            # Conflicting numbers signal distinct facts, not duplicates.
+            if (
+                node_entity is not None
+                and existing_entity is not None
+                and node_entity[0] == existing_entity[0]  # same token
+                and contains_conflicting_numbers(node.content, existing_node.content)
+            ):
+                continue
+
             if normalized_content == existing_content:
                 return existing_node, "exact_content", 1.0
             if normalized_label == existing_label:
@@ -1187,7 +1199,21 @@ class MemoryGraph:
             if label_score >= 0.92 and similarity >= max(self.dedup_same_label_threshold - 0.2, 0.6):
                 return existing_node, "label_entity_match", similarity
 
-            # ── Layer 3b: Jaccard-boosted merge (type-aware lower threshold) ──
+            # ── Layer 3b: same-entity aggressive merge ──────────────────
+            # If both nodes reference the SAME named entity, lower the cosine
+            # threshold significantly — "fastapi was chosen" and "we chose fastapi
+            # because async" should merge even at cosine ~0.65.
+            # The numeric-conflict guard (Layer 0b) already blocked cases where
+            # the same entity appears with different critical numbers.
+            if (
+                node_entity is not None
+                and existing_entity is not None
+                and node_entity[0] == existing_entity[0]  # identical entity token
+                and similarity >= 0.60
+            ):
+                return existing_node, "same_entity_merge", similarity
+
+            # ── Layer 3c: Jaccard-boosted merge (type-aware lower threshold) ──
             # If content words overlap significantly AND cosine is high for the
             # node type, treat as duplicate — catches paraphrase true-dups.
             jaccard = content_token_jaccard(node.content, existing_node.content)

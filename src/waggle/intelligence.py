@@ -240,6 +240,23 @@ def tokenize_text(value: str) -> set[str]:
     }
 
 
+_NUMERIC_RE = re.compile(r"\b\d+\b")
+
+
+def contains_conflicting_numbers(a: str, b: str) -> bool:
+    """Return True if *a* and *b* each contain numbers AND their number sets differ.
+
+    Guards against merging same-entity nodes that differ only on a critical
+    numeric value — e.g. "JWT tokens expire after 15 minutes" vs "JWT tokens
+    expire after 1 hour". If the numbers agree (or neither has numbers), this
+    returns False and the normal merge logic proceeds.
+    """
+    nums_a = set(_NUMERIC_RE.findall(a))
+    nums_b = set(_NUMERIC_RE.findall(b))
+    if not nums_a or not nums_b:
+        return False
+    return nums_a != nums_b
+
 
 def label_similarity(left: str, right: str) -> float:
     return SequenceMatcher(None, normalize_text(left), normalize_text(right)).ratio()
