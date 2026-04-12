@@ -1,0 +1,41 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: graph-memory
+  annotations:
+    # cert-manager will provision and renew the TLS certificate automatically.
+    # Switch to letsencrypt-prod once you have confirmed the staging cert works.
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+    nginx.ingress.kubernetes.io/proxy-body-size: "2m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "35"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "35"
+    # Force HTTPS; redirect HTTP → HTTPS
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # Expose /metrics only to cluster-internal scrapers — add IP allow-list if needed
+    nginx.ingress.kubernetes.io/server-snippet: |
+      location /metrics {
+        allow 10.0.0.0/8;
+        allow 172.16.0.0/12;
+        allow 192.168.0.0/16;
+        deny all;
+      }
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        # Replace with your real hostname before applying
+        - graph-memory.example.com
+      # cert-manager will create this Secret automatically
+      secretName: graph-memory-tls
+  rules:
+    - host: graph-memory.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: graph-memory
+                port:
+                  name: http

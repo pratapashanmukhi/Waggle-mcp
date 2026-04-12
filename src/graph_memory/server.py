@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import tempfile
 import time
 import uuid
@@ -912,6 +913,8 @@ def _build_parser() -> argparse.ArgumentParser:
     migrate_sqlite = subparsers.add_parser("migrate-sqlite")
     migrate_sqlite.add_argument("--db-path", required=True)
     migrate_sqlite.add_argument("--tenant-id", required=True)
+
+    subparsers.add_parser("init", help="Interactive setup wizard — configure an MCP client to use graph-memory-mcp.")
     return parser
 
 
@@ -966,10 +969,240 @@ def _run_admin_command(config: AppConfig, args: argparse.Namespace) -> int:
     raise ValidationFailure(f"Unknown command: {args.command}")
 
 
+# ---------------------------------------------------------------------------
+# init wizard
+# ---------------------------------------------------------------------------
+
+_GREEN = "\033[92m"
+_RED = "\033[91m"
+_CYAN = "\033[96m"
+_BOLD = "\033[1m"
+_RESET = "\033[0m"
+_NO_COLOR = not sys.stdout.isatty()
+
+
+def _c(code: str, text: str) -> str:
+    """Apply ANSI colour code, or return plain text when not a tty."""
+    return text if _NO_COLOR else f"{code}{text}{_RESET}"
+
+
+def _prompt_choice(question: str, choices: list[str]) -> str:
+    """Render an arrow-key style menu (keyboard fallback: number entry)."""
+    print(f"\n{_c(_BOLD, question)}")
+    for i, choice in enumerate(choices, 1):
+        print(f"  {_c(_CYAN, str(i) + '.')} {choice}")
+    while True:
+        raw = input(f"  Enter number [1-{len(choices)}]: ").strip()
+        if raw.isdigit() and 1 <= int(raw) <= len(choices):
+            selected = choices[int(raw) - 1]
+            print(f"  {_c(_GREEN, '>')} {selected}")
+            return selected
+        print(f"  {_c(_RED, 'Invalid choice, try again.')}")
+
+
+def _prompt_path(question: str, default: str) -> str:
+    """Prompt for a file path, showing the default."""
+    print(f"\n{_c(_BOLD, question)}")
+    raw = input(f"  [{default}]: ").strip()
+    result = raw or default
+    print(f"  {_c(_GREEN, '>')} {result}")
+    return result
+
+
+def _ok(msg: str) -> None:
+    print(f"  {_c(_GREEN, chr(0x2705))} {msg}")
+
+
+def _fail(msg: str) -> None:
+    print(f"  {_c(_RED, chr(0x274C))} {msg}")
+
+
+def _python_exe() -> str:
+    """Return the Python executable used to run this process."""
+    return sys.executable
+
+
+def _package_root() -> str:
+    """Return a best-effort src/ directory for PYTHONPATH."""
+    # Walk up from this file looking for src/graph_memory
+    here = Path(__file__).resolve().parent
+    candidate = here.parent  # expected: .../src
+    if (candidate / "graph_memory").is_dir():
+        return str(candidate)
+    return str(here.parent)
+
+
+# ── client config writers ────────────────────────────────────────────────────
+
+def _write_claude_desktop(db_path: str, python_exe: str, src_root: str) -> Path:
+    """Write ~/.config/claude/claude_desktop_config.json (macOS/Linux)."""
+    if sys.platform == "darwin":
+        config_dir = Path.home() / "Library" / "Application Support" / "Claude"
+    else:
+        config_dir = Path.home() / ".config" / "claude"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_file = config_dir / "claude_desktop_config.json"
+
+    existing: dict = {}
+    if config_file.exists():
+        try:
+            existing = json.loads(config_file.read_text())
+        except json.JSONDecodeError:
+            pass
+
+    existing.setdefault("mcpServers", {})
+    existing["mcpServers"]["graph-memory"] = {
+        "command": python_exe,
+        "args": ["-m", "graph_memory.server"],
+        "env": {
+            "PYTHONPATH": src_root,
+            "GRAPH_MEMORY_TRANSPORT": "stdio",
+            "GRAPH_MEMORY_BACKEND": "sqlite",
+            "GRAPH_MEMORY_DB_PATH": db_path,
+            "GRAPH_MEMORY_DEFAULT_TENANT_ID": "local-default",
+            "GRAPH_MEMORY_MODEL": "all-MiniLM-L6-v2",
+        },
+    }
+    config_file.write_text(json.dumps(existing, indent=2))
+    return config_file
+
+
+def _write_cursor(db_path: str, python_exe: str, src_root: str) -> Path:
+    """Write ~/.cursor/mcp.json."""
+    config_dir = Path.home() / ".cursor"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_file = config_dir / "mcp.json"
+
+    existing: dict = {}
+    if config_file.exists():
+        try:
+            existing = json.loads(config_file.read_text())
+        except json.JSONDecodeError:
+            pass
+
+    existing.setdefault("mcpServers", {})
+    existing["mcpServers"]["graph-memory"] = {
+        "command": python_exe,
+        "args": ["-m", "graph_memory.server"],
+        "env": {
+            "PYTHONPATH": src_root,
+            "GRAPH_MEMORY_TRANSPORT": "stdio",
+            "GRAPH_MEMORY_BACKEND": "sqlite",
+            "GRAPH_MEMORY_DB_PATH": db_path,
+            "GRAPH_MEMORY_DEFAULT_TENANT_ID": "local-default",
+            "GRAPH_MEMORY_MODEL": "all-MiniLM-L6-v2",
+        },
+    }
+    config_file.write_text(json.dumps(existing, indent=2))
+    return config_file
+
+
+def _write_codex(db_path: str, python_exe: str, src_root: str) -> Path:
+    """Write ~/codex_mcp.toml (printable TOML snippet — Codex uses a TOML file)."""
+    config_file = Path.home() / "codex_mcp.toml"
+    toml_block = (
+        '[mcp_servers.graph-memory]\n'
+        f'command = "{python_exe}"\n'
+        'args = ["-m", "graph_memory.server"]\n'
+        f'cwd = "{Path(src_root).parent}"\n'
+        'env = {\n'
+        f'  PYTHONPATH = "{src_root}",\n'
+        '  GRAPH_MEMORY_TRANSPORT = "stdio",\n'
+        '  GRAPH_MEMORY_BACKEND = "sqlite",\n'
+        f'  GRAPH_MEMORY_DB_PATH = "{db_path}",\n'
+        '  GRAPH_MEMORY_DEFAULT_TENANT_ID = "local-default",\n'
+        '  GRAPH_MEMORY_MODEL = "all-MiniLM-L6-v2"\n'
+        '}\n'
+    )
+    config_file.write_text(toml_block)
+    return config_file
+
+
+def _write_other(db_path: str, python_exe: str, src_root: str) -> Path:
+    """Write a generic JSON snippet to ~/graph-memory-mcp-config.json."""
+    config_file = Path.home() / "graph-memory-mcp-config.json"
+    snippet = {
+        "command": python_exe,
+        "args": ["-m", "graph_memory.server"],
+        "env": {
+            "PYTHONPATH": src_root,
+            "GRAPH_MEMORY_TRANSPORT": "stdio",
+            "GRAPH_MEMORY_BACKEND": "sqlite",
+            "GRAPH_MEMORY_DB_PATH": db_path,
+            "GRAPH_MEMORY_DEFAULT_TENANT_ID": "local-default",
+            "GRAPH_MEMORY_MODEL": "all-MiniLM-L6-v2",
+        },
+    }
+    config_file.write_text(json.dumps(snippet, indent=2))
+    return config_file
+
+
+_CLIENT_WRITERS = {
+    "Claude Desktop": _write_claude_desktop,
+    "Cursor": _write_cursor,
+    "Codex": _write_codex,
+    "Other": _write_other,
+}
+
+_RESTART_HINTS = {
+    "Claude Desktop": "Restart Claude Desktop to activate.",
+    "Cursor": "Reload the Cursor window (Cmd/Ctrl+Shift+P → 'Reload Window') to activate.",
+    "Codex": "Copy the TOML block into your Codex config file, then restart Codex.",
+    "Other": "Add the JSON config to your MCP client's server list, then restart it.",
+}
+
+
+def _run_init() -> int:
+    """Interactive setup wizard for graph-memory-mcp."""
+    print()
+    print(_c(_BOLD, "graph-memory-mcp setup wizard"))
+    print(_c(_CYAN, "─" * 40))
+
+    clients = list(_CLIENT_WRITERS.keys())
+    client = _prompt_choice("Which MCP client are you using?", clients)
+
+    default_db = str(Path.home() / ".graph-memory" / "memory.db")
+    db_path_raw = _prompt_path("Where should the database be stored?", default_db)
+    db_path = str(Path(db_path_raw).expanduser().resolve())
+
+    python_exe = _python_exe()
+    src_root = _package_root()
+
+    print()
+
+    # Write client config
+    writer = _CLIENT_WRITERS[client]
+    try:
+        config_file = writer(db_path, python_exe, src_root)
+        _ok(f"Config written to {config_file}")
+    except OSError as exc:
+        _fail(f"Could not write config: {exc}")
+        return 1
+
+    # Create database directory
+    db_dir = Path(db_path).parent
+    try:
+        db_dir.mkdir(parents=True, exist_ok=True)
+        _ok(f"Database directory ready at {db_dir}")
+    except OSError as exc:
+        _fail(f"Could not create database directory: {exc}")
+        return 1
+
+    # Restart hint
+    print(f"  {_c(_CYAN, chr(0x27A1))}  {_RESTART_HINTS[client]}")
+    print()
+    return 0
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
     command = args.command or "serve"
+
+    # init runs before AppConfig so it works with no env vars set
+    if command == "init":
+        sys.exit(_run_init())
+
     config = AppConfig.from_env()
     configure_logging(config.log_level)
     LOGGER.info("graph_memory_startup")

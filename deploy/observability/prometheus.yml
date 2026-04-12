@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: graph-memory-mcp
+    static_configs:
+      # Adjust host:port to match your running graph-memory-mcp instance.
+      # When using docker-compose.observability.yml the service is reachable
+      # via the compose network name "graph-memory".
+      - targets:
+          - graph-memory:8080
+    metrics_path: /metrics
+    # The /metrics endpoint texts are Prometheus exposition format.
+    # graph-memory does not require authentication for the metrics endpoint
+    # when accessed inside the cluster; if you expose it externally, restrict
+    # access at the ingress layer.
