@@ -22,6 +22,18 @@
 
 ---
 
+## What's New — v0.1.7
+
+- **Benchmark harness**: end-to-end `WaggleAdapter` connecting the graph engine to ConvoMem / MemBench runners with automated exact-match scoring and latency logging.
+- **LongMemEval integration**: CLI-driven ingestion and retrieval evaluation against the official LongMemEval split (held-out `81.6% R@5`).
+- **Logging utilities**: structured log helpers (`logging_utils`) for consistent, level-aware output across all subsystems.
+- **Evidence tracking**: new `evidence.py` module records source provenance on stored nodes so reasoning chains are fully traceable.
+- **Observability stack**: Grafana dashboard, Prometheus config, and Docker Compose overlay in `deploy/observability/`.
+- **Kubernetes manifests**: production-grade `deployment.yaml`, network policy, external-secret, and certificate templates under `deploy/kubernetes/`.
+- **Operational runbooks**: incident response, secret management, API-key rotation, and onboarding guides added to `docs/runbooks/`.
+
+---
+
 ## Why waggle-mcp?
 
 `waggle-mcp` is a local-first memory layer for MCP-compatible AI clients, built on a persistent knowledge graph. It gives your AI a persistent knowledge graph it can read and write through any MCP-compatible client (Claude Desktop, Cursor, Codex, Antigravity, etc.).
@@ -46,6 +58,8 @@ waggle-mcp init
 ```
 
 `init` detects your MCP client, writes its config, and creates the local database directory. Default mode is local SQLite with on-device embeddings. Antigravity and manual configuration details are in [docs/reference.md](./docs/reference.md).
+
+Manual MCP setup examples for **Codex**, **Claude Code**, **Cursor**, and **Antigravity** are in [docs/reference.md](./docs/reference.md#manual-client-configuration).
 
 ---
 
