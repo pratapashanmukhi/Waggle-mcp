@@ -17,6 +17,14 @@ Regenerate it at any time to update results against the current fixture set. The
 
 For a dated, auditable snapshot of the exact command outputs used to verify current README benchmark claims, see [verification/2026-04-18-readme-claims/README.md](/Users/abhigyanshekhar/Desktop/MCP/tests/artifacts/verification/2026-04-18-readme-claims/README.md).
 
+## Artifact size policy (practical)
+
+Some of the JSON artifacts are intentionally large (for example LongMemEval result dumps and the dated `benchmark_snapshot.json`). This repo currently keeps them checked in so anyone can audit the exact numbers without rerunning the model-heavy steps.
+
+If you want a slimmer repo in the future, the recommended split is:
+- Keep: `tests/artifacts/verification/<date>-readme-claims/README.md`, `benchmark_snapshot.md`, and `benchmark_harness_stdout.txt`
+- Optional: `benchmark_snapshot.json` and other large raw JSON dumps (move to release assets, a separate `artifacts/` branch, or git-lfs)
+
 ---
 
 ## Fixture inventory
