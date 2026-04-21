@@ -1,0 +1,125 @@
+startCommand:
+  type: stdio
+
+configSchema:
+  type: object
+  description: Configuration for running Waggle MCP in an inspectable stdio sandbox.
+  properties:
+    WAGGLE_MODEL:
+      type: string
+      description: Sentence-transformers model for local embeddings.
+      default: all-MiniLM-L6-v2
+    WAGGLE_BACKEND:
+      type: string
+      description: Backend database type.
+      enum:
+        - sqlite
+        - neo4j
+      default: sqlite
+    WAGGLE_DB_PATH:
+      type: string
+      description: Path to SQLite database file when WAGGLE_BACKEND=sqlite.
+      default: /tmp/waggle-memory.db
+    MCP_PROXY_DEBUG:
+      type: boolean
+      description: Enable verbose mcp-proxy debugging.
+      default: false
+    WAGGLE_HTTP_HOST:
+      type: string
+      description: Bind host for HTTP service.
+      default: 0.0.0.0
+    WAGGLE_HTTP_PORT:
+      type: integer
+      description: Bind port for HTTP service.
+      default: 8080
+    WAGGLE_LOG_LEVEL:
+      type: string
+      description: Log level.
+      default: INFO
+    WAGGLE_NEO4J_URI:
+      type: string
+      description: Neo4j Bolt URI, required with WAGGLE_BACKEND=neo4j.
+      default: ""
+    WAGGLE_TRANSPORT:
+      type: string
+      description: Transport mode.
+      enum:
+        - stdio
+        - http
+      default: stdio
+    WAGGLE_EXPORT_DIR:
+      type: string
+      description: Optional export directory.
+      default: /tmp/waggle-exports
+    WAGGLE_NEO4J_DATABASE:
+      type: string
+      description: Neo4j database name when WAGGLE_BACKEND=neo4j.
+      default: ""
+    WAGGLE_NEO4J_PASSWORD:
+      type: string
+      description: Neo4j password, required with WAGGLE_BACKEND=neo4j.
+      format: password
+      default: ""
+    WAGGLE_NEO4J_USERNAME:
+      type: string
+      description: Neo4j username, required with WAGGLE_BACKEND=neo4j.
+      default: ""
+    WAGGLE_RATE_LIMIT_RPM:
+      type: integer
+      description: Global rate limit in requests per minute.
+      default: 120
+    WAGGLE_DEFAULT_TENANT_ID:
+      type: string
+      description: Default tenant ID.
+      default: local-default
+    WAGGLE_MAX_PAYLOAD_BYTES:
+      type: integer
+      description: Max request size in bytes.
+      default: 1048576
+    WAGGLE_WRITE_RATE_LIMIT_RPM:
+      type: integer
+      description: Write-tool rate limit in requests per minute.
+      default: 60
+    WAGGLE_MAX_CONCURRENT_REQUESTS:
+      type: integer
+      description: Concurrency cap.
+      default: 8
+    WAGGLE_REQUEST_TIMEOUT_SECONDS:
+      type: integer
+      description: Per-request timeout in seconds.
+      default: 30
+
+commandFunction: |
+  (config) => ({
+    command: 'uv',
+    args: ['run', '--project', '/app', '--no-sync', 'waggle-mcp', 'serve'],
+    env: {
+      WAGGLE_MODEL: config.WAGGLE_MODEL || 'all-MiniLM-L6-v2',
+      WAGGLE_BACKEND: config.WAGGLE_BACKEND || 'sqlite',
+      WAGGLE_DB_PATH: config.WAGGLE_DB_PATH || '/tmp/waggle-memory.db',
+      MCP_PROXY_DEBUG: String(config.MCP_PROXY_DEBUG ?? false),
+      WAGGLE_HTTP_HOST: config.WAGGLE_HTTP_HOST || '0.0.0.0',
+      WAGGLE_HTTP_PORT: String(config.WAGGLE_HTTP_PORT || 8080),
+      WAGGLE_LOG_LEVEL: config.WAGGLE_LOG_LEVEL || 'INFO',
+      WAGGLE_NEO4J_URI: config.WAGGLE_NEO4J_URI || '',
+      WAGGLE_TRANSPORT: config.WAGGLE_TRANSPORT || 'stdio',
+      WAGGLE_EXPORT_DIR: config.WAGGLE_EXPORT_DIR || '/tmp/waggle-exports',
+      WAGGLE_NEO4J_DATABASE: config.WAGGLE_NEO4J_DATABASE || '',
+      WAGGLE_NEO4J_PASSWORD: config.WAGGLE_NEO4J_PASSWORD || '',
+      WAGGLE_NEO4J_USERNAME: config.WAGGLE_NEO4J_USERNAME || '',
+      WAGGLE_RATE_LIMIT_RPM: String(config.WAGGLE_RATE_LIMIT_RPM || 120),
+      WAGGLE_DEFAULT_TENANT_ID: config.WAGGLE_DEFAULT_TENANT_ID || 'local-default',
+      WAGGLE_MAX_PAYLOAD_BYTES: String(config.WAGGLE_MAX_PAYLOAD_BYTES || 1048576),
+      WAGGLE_WRITE_RATE_LIMIT_RPM: String(config.WAGGLE_WRITE_RATE_LIMIT_RPM || 60),
+      WAGGLE_MAX_CONCURRENT_REQUESTS: String(config.WAGGLE_MAX_CONCURRENT_REQUESTS || 8),
+      WAGGLE_REQUEST_TIMEOUT_SECONDS: String(config.WAGGLE_REQUEST_TIMEOUT_SECONDS || 30)
+    }
+  })
+
+exampleConfig:
+  WAGGLE_MODEL: all-MiniLM-L6-v2
+  WAGGLE_BACKEND: sqlite
+  WAGGLE_DB_PATH: /tmp/waggle-memory.db
+  WAGGLE_TRANSPORT: stdio
+  WAGGLE_LOG_LEVEL: INFO
+  MCP_PROXY_DEBUG: false
