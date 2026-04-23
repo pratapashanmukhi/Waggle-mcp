@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Your AI forgets everything between sessions. Waggle gives it a graph-backed brain.</strong><br/>
-  Persistent, structured memory for AI agents — typically lower-token than chunk-based retrieval, often 2-4× on factual lookups.
+  Persistent, structured memory for AI agents — in the checked-in comparison snapshot, about 2.6× fewer tokens on factual lookups.
 </p>
 
 <p align="center">
@@ -28,33 +28,30 @@
 
 ---
 
-## What's New — v0.1.9
+## Demo First
 
-- **Rollover transcript handoff CLI**: `waggle-mcp ingest-transcript-handoff` ingests full ordered transcripts, deduplicates them with `message_identity`, and exports a session-scoped handoff bundle for the next window or IDE.
-- **Cross-run completion fixes**: append-only reruns now avoid reprocessing already completed turns while still completing a previously trailing `user` block when the matching `assistant` arrives later.
-- **Evidence alignment fixes**: batch-ingested nodes now keep evidence turn indices aligned with the actual stored transcript rows, including tool/system-interleaved sessions.
-- **Export error contract hardening**: handoff export failures now surface as real CLI failures instead of being silently downgraded into `export_skipped`.
-- **Benchmark harness**: end-to-end `WaggleAdapter` connecting the graph engine to ConvoMem / MemBench runners with automated exact-match scoring and latency logging.
-- **LongMemEval integration**: CLI-driven retrieval evaluation against the official LongMemEval split (`97.4% R@5` / `88.4% Exact@5` in the latest `graph_raw` full-run artifact, `96.4%` / `85.6%` in the saved `graph_hybrid` artifact).
-- **Observability stack**: Grafana dashboard, Prometheus config, and Docker Compose overlay in `deploy/observability/`.
-- **Operational runbooks**: incident response, secret management, API-key rotation, and onboarding guides added to `docs/runbooks/`.
+The quickest way to understand Waggle is to run the feature demo and the smoke test:
 
----
+- [`tests/artifacts/test-run/comprehensive_feature_demo.md`](./tests/artifacts/test-run/comprehensive_feature_demo.md)
+- [`scripts/smoke_test_mcp.py`](./scripts/smoke_test_mcp.py)
+- [`waggle-mcp features`](#cli-command-reference)
 
-## Who is this for?
+That demo exercises the full MCP surface: graph ingestion, retrieval, conflict handling, export/import, and graph inspection.
+
+## Who It's For
 
 **→ Individual developer** extending Claude, Codex, Cursor, or Antigravity with persistent memory:
 Use Python 3.11+ and install via `pipx` (no venv activation needed):
 `brew install pipx && pipx ensurepath && pipx install waggle-mcp && waggle-mcp init`.
 SQLite + local embeddings, zero infra.
 
-**→ Team running a shared memory service:** Waggle ships with a Docker image, Kubernetes manifests, Prometheus metrics, and multi-tenant auth. See [deploy/kubernetes/](./deploy/kubernetes/) and [docs/runbooks/](./docs/runbooks/).
+**→ Team sharing a canonical project memory across multiple agents and developers:** Waggle ships with a Docker image, Kubernetes manifests, Prometheus metrics, and multi-tenant auth. See [deploy/kubernetes/](./deploy/kubernetes/) and [docs/runbooks/](./docs/runbooks/).
 
 Both paths share the same MCP tool surface — the difference is only the backend and transport.
 
 ---
 
-## Why waggle-mcp?
+## Why Waggle
 
 `waggle-mcp` is a local-first memory layer for MCP-compatible AI clients, built on a persistent knowledge graph.
 
@@ -102,6 +99,8 @@ Manual MCP setup examples for **Codex**, **Claude Code**, **Cursor**, and **Anti
 
 Comprehensive live feature run (full tool surface, multi-query graph tests, export/import validation):
 [`tests/artifacts/test-run/comprehensive_feature_demo.md`](./tests/artifacts/test-run/comprehensive_feature_demo.md)
+
+> **Best entry point:** if you do nothing else, run `waggle-mcp features` to get the tool map, workflows, and setup hints in one place.
 
 > **⚠️ Edges are what make graph memory work.**
 > `observe_conversation` and `decompose_and_store` create edges automatically.
@@ -218,6 +217,28 @@ You're using PostgreSQL for this project.
 
 If you see that kind of recall in a new session, you're live.
 
+### What To Ask The Agent
+
+| Ask the agent... | Tool called |
+|---|---|
+| "Remember that..." | `observe_conversation` |
+| "What do you know about X?" | `query_graph` |
+| "What changed recently?" | `graph_diff` |
+| "Summarize context for a new session" | `prime_context` |
+| "Show all stored topics" | `get_topics` |
+| "Export my memory to a file" | `export_graph_backup` |
+
+<details>
+<summary>What's New — v0.1.9</summary>
+
+- `waggle-mcp ingest-transcript-handoff` ingests ordered transcripts, deduplicates by `message_identity`, and exports a session-scoped handoff bundle.
+- Append-only reruns avoid reprocessing completed turns while still finishing a trailing `user` block when the matching `assistant` arrives later.
+- Batch ingestion keeps evidence turn indices aligned with stored transcript rows, including tool/system-interleaved sessions.
+- Handoff export failures now surface as real CLI failures instead of being downgraded into `export_skipped`.
+- The repo includes an end-to-end benchmark harness, LongMemEval artifacts, observability assets, and runbooks.
+
+</details>
+
 ## Automatic Memory Setup For Codex And Antigravity
 
 Registering Waggle as an MCP server is necessary, but it is not sufficient for automatic cross-session memory. The client still needs instructions telling the agent to use Waggle in the background.
@@ -257,17 +278,6 @@ Do not ask the user to trigger Waggle manually. Use it in the background when re
 - **Rollover handoff is separate from live-turn memory.** `ingest-transcript-handoff` fixes end-of-window/session import and export. Live conversational memory still depends on automatic `observe_conversation` and `query_graph` usage during normal chats.
 - **For same-machine multi-client sharing, use the same `WAGGLE_DB_PATH`.** Codex and Antigravity can share one local brain if both point to the same SQLite file.
 
-### Quick-reference tool table
-
-| Ask the agent… | Tool called |
-|---|---|
-| *"Remember that…"* | `observe_conversation` |
-| *"What do you know about X?"* | `query_graph` |
-| *"What changed recently?"* | `graph_diff` |
-| *"Summarize context for a new session"* | `prime_context` |
-| *"Show all stored topics"* | `get_topics` |
-| *"Export my memory to a file"* | `export_graph_backup` |
-
 For the full tool surface and environment variable reference see [docs/reference.md](./docs/reference.md).
 
 ---
@@ -279,7 +289,7 @@ Waggle includes a built-in CLI for setup, maintenance, and learning the memory s
 | Command | Description |
 |---|---|
 | `waggle-mcp --help` | Show all available commands, options, and usage examples. |
-| `waggle-mcp features` | **Recommended** — Explain the main tools, graph workflows, and how connected context reaches the model. |
+| `waggle-mcp features` | **Best first command** — Explain the main tools, graph workflows, and how connected context reaches the model. |
 | `waggle-mcp init` | Interactive setup wizard to configure Codex, Claude, Cursor, or Antigravity. |
 | `waggle-mcp serve` | Run the MCP server (usually started automatically by your client). |
 | `waggle-mcp ingest-transcript-handoff` | Ingest a rollover transcript and export a handoff bundle for the next window or IDE. |
@@ -390,6 +400,8 @@ graph TD
 - **Conflict Resolution**: `list_conflicts` / `resolve_conflict` to manage contradictions without losing history.
 - **Deterministic Fallback**: Stable SHA-256 hashing for reliable, reproducible offline operation when transformer models are unavailable.
 
+For a concise "what to say about Waggle" version, see [docs/briefing.md](./docs/briefing.md). That doc is intentionally a media-kit style summary; this README remains the canonical product and setup reference.
+
 ---
 
 ## Security & Privacy
@@ -397,6 +409,8 @@ graph TD
 By default, data stays local on your machine (`sqlite` backend, local database path such as `~/.waggle/memory.db`).  
 Waggle does not require telemetry or cloud calls for core local operation.  
 Your conversation memory only leaves your machine if you explicitly configure a remote backend or remote infrastructure.
+
+Waggle currently stores local memory as a normal SQLite file and does not add application-level encryption at rest. Use standard filesystem permissions and OS disk encryption if the stored conversation history is sensitive.
 
 ---
 
@@ -448,55 +462,26 @@ Notes:
 
 ---
 
-## Performance Snapshot
-
-| Operation | Time | Notes |
-|---|---:|---|
-| `observe_conversation` | ~1.54 ms (mean) | Single conversation turn ingestion, local `sqlite` + deterministic embeddings |
-| `query_graph` | ~1.60 ms (mean) | Subgraph retrieval (`max_nodes=12`, `max_depth=2`) |
-| `graph_diff` | ~0.80 ms (mean) | Temporal diff over local graph |
-| Context tokens (comparative mean) | `63.0` vs `161.8` | Waggle vs naive RAG baseline (`~2.6x` lower-token) |
-
-Sources: [performance_snapshot.md](./tests/artifacts/verification/2026-04-20-performance-snapshot/performance_snapshot.md), [benchmark_current.md](./tests/artifacts/benchmark_current.md)
-
-> **Example:** Retrieving a database decision stored days ago uses about `63` tokens from a Waggle subgraph vs about `162` tokens from naive context replay (`~2.6x` lower-token).
-
----
-
 ## Benchmarks & Verification
 
-### External Benchmark — LongMemEval
+Checked-in artifacts back the headline claims:
 
-LongMemEval session-retrieval results (500 questions):
+- Token use: `63.0` comparative mean context tokens for Waggle vs `161.8` for the naive RAG baseline, about `2.6x` fewer tokens on the saved comparison snapshot.
+- LongMemEval: `graph_raw` reaches `97.4% R@5` and `88.4% Exact@5` on the saved 500-question split; `graph_hybrid` reaches `96.4%` and `85.6%`.
+- Local operation latency snapshot: `observe_conversation` mean `1.54 ms`, `query_graph` mean `1.60 ms`, `graph_diff` mean `0.80 ms` using local SQLite plus deterministic embeddings.
+- Automated verification: MCP integration, transcript handoff, and benchmark harness tests are checked into the repo, and the local smoke path exercises live `store_node`, `query_graph`, and `graph://stats`.
 
-| Method | R@5 | Exact@5 | Notes |
-|------|-----|---------|-------|
-| `graph_raw` | `97.4%` | `88.4%` | Full split, no second-stage reranking (`13/500` misses, `58/500` non-exact). Source: [`results_graph_raw_0.1.10_full.json`](./benchmarks/longmemeval/results_graph_raw_0.1.10_full.json) |
-| `graph_hybrid` | `96.4%` | `85.6%` | Full split with hybrid reranking (`18/500` misses). Source: [`results_graph_hybrid.json`](./benchmarks/longmemeval/results_graph_hybrid.json) |
+README benchmark claims in this repo are limited to Waggle runs with checked-in artifacts and reproducible commands. Cross-project comparisons are intentionally excluded unless they are apples-to-apples on split, protocol, and scoring.
 
-`Exact@5` is stricter than R@5 and is included here to show precision on support-session retrieval, not just any top-5 hit.
+Detailed artifacts and methodology live in:
 
-**Important:** on the current saved artifacts, raw retrieval outperforms hybrid reranking on both R@5 and Exact@5. We are treating this as a tuning target for `v0.1.9` rather than changing defaults to a weaker mode.
+- [docs/benchmark-methodology.md](./docs/benchmark-methodology.md)
+- [docs/longmemeval-methodology.md](./docs/longmemeval-methodology.md)
+- [tests/artifacts/README.md](./tests/artifacts/README.md)
+- [tests/artifacts/benchmark_current.md](./tests/artifacts/benchmark_current.md)
+- [tests/artifacts/verification/2026-04-20-performance-snapshot/performance_snapshot.md](./tests/artifacts/verification/2026-04-20-performance-snapshot/performance_snapshot.md)
 
-### Benchmark Policy
-
-README benchmark claims in this repo are limited to Waggle runs with checked-in artifacts and reproducible commands.  
-Cross-project comparisons are intentionally excluded here unless they are strictly apples-to-apples on split, protocol, and scoring.
-For exact setup details and verification snapshots, see [tests/artifacts/README.md](./tests/artifacts/README.md).
-
-### Internal Fixtures
-
-| Area | Corpus | Result |
-|------|--------|--------|
-| Extraction | 25-case deterministic fixture | `100.0%` (source: [`benchmark_current.md`](./tests/artifacts/benchmark_current.md)) |
-| Retrieval | 18-query retrieval fixture | `83.3% Hit@k` (source: [`benchmark_current.md`](./tests/artifacts/benchmark_current.md)) |
-| Query stress | 40 adversarial retrieval-only cases | `95.0% Hit@k`, `95.0% exact support` (source: [`benchmark_current.md`](./tests/artifacts/benchmark_current.md)) |
-| Deduplication | 32 cases (semi-semantic) | `0` false merges; `100.0%` overall at threshold `0.97` (source: [`benchmark_current.json`](./tests/artifacts/benchmark_current.json)) |
-| Automated tests | Infrastructure & logic | `91 passed` (source: [`pytest_test_benchmark_harness.txt`](./tests/artifacts/verification/2026-04-18-readme-claims/pytest_test_benchmark_harness.txt)) |
-
-**Deduplication note:** Zero false-positive merges is the safety invariant. The current fixture adds paraphrase-heavy true duplicates, temporal near-duplicates, and cross-topic false friends; the saved run maintains `false_positives = 0`.
-
-Detailed artifacts and methodology: **[Benchmark Methodology](./docs/benchmark-methodology.md)** · [tests/artifacts/README.md](./tests/artifacts/README.md)
+> **Note on dates:** some checked-in benchmark and demo artifacts use `2026-04-2x` timestamps as fixture metadata for reproducibility. Treat them as artifact dates, not a product release calendar.
 
 ---
 
