@@ -8,6 +8,11 @@ from waggle.errors import ValidationFailure
 
 DEFAULT_DB_PATH = "~/.waggle/memory.db"
 
+# Valid values for WAGGLE_STARTUP_MODE
+STARTUP_MODE_FAST = "fast"      # skip ML warmup; schema/inspection only
+STARTUP_MODE_NORMAL = "normal"  # background warmup (default)
+STARTUP_MODE_STRICT = "strict"  # block until embeddings ready before serving
+
 
 @dataclass(slots=True)
 class AppConfig:
@@ -29,6 +34,7 @@ class AppConfig:
     neo4j_username: str
     neo4j_password: str
     neo4j_database: str
+    startup_mode: str = STARTUP_MODE_NORMAL  # fast | normal | strict
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -51,6 +57,7 @@ class AppConfig:
             neo4j_username=os.environ.get("WAGGLE_NEO4J_USERNAME", "").strip(),
             neo4j_password=os.environ.get("WAGGLE_NEO4J_PASSWORD", ""),
             neo4j_database=os.environ.get("WAGGLE_NEO4J_DATABASE", "").strip(),
+            startup_mode=os.environ.get("WAGGLE_STARTUP_MODE", STARTUP_MODE_NORMAL).strip().lower(),
         )
         config.validate()
         return config
@@ -70,3 +77,16 @@ class AppConfig:
             raise ValidationFailure(
                 "Neo4j backend requires WAGGLE_NEO4J_URI, WAGGLE_NEO4J_USERNAME, and WAGGLE_NEO4J_PASSWORD."
             )
+        if self.startup_mode not in {STARTUP_MODE_FAST, STARTUP_MODE_NORMAL, STARTUP_MODE_STRICT}:
+            raise ValidationFailure(
+                f"Unsupported WAGGLE_STARTUP_MODE: {self.startup_mode!r}. "
+                f"Valid values: fast, normal, strict."
+            )
+
+    @property
+    def is_fast_mode(self) -> bool:
+        return self.startup_mode == STARTUP_MODE_FAST
+
+    @property
+    def is_strict_mode(self) -> bool:
+        return self.startup_mode == STARTUP_MODE_STRICT

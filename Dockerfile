@@ -1,48 +1,89 @@
+# syntax=docker/dockerfile:1.7
+# ──────────────────────────────────────────────────────────────────────────────
+# Waggle MCP — pre-baked image
+# Model is downloaded at build time and stored in a named volume so every
+# subsequent restart skips the download entirely (~3 s cold start vs ~30 s).
+# ──────────────────────────────────────────────────────────────────────────────
+FROM python:3.11-slim AS builder
+
+# Mount BuildKit cache dirs to avoid re-downloading on every build
+ENV PIP_NO_CACHE_DIR=1
+
+WORKDIR /build
+COPY pyproject.toml README.md LICENSE ./
+COPY src ./src
+
+# 1) CPU-only PyTorch (avoids pulling the 2 GB CUDA wheels)
+# 2) Install project + neo4j extras
+# 3) Pre-download the embedding model so it is baked into the image layer
+RUN pip install --upgrade pip && \
+    pip install torch --index-url https://download.pytorch.org/whl/cpu && \
+    pip install ".[neo4j]" && \
+    HF_HOME=/root/.cache/huggingface \
+    SENTENCE_TRANSFORMERS_HOME=/root/.cache/sentence-transformers \
+    python -c "from sentence_transformers import SentenceTransformer; \
+               SentenceTransformer('all-MiniLM-L6-v2')"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Runtime image (re-uses the same base so layers are shared in the registry)
+# ──────────────────────────────────────────────────────────────────────────────
 FROM python:3.11-slim
 
 LABEL org.opencontainers.image.title="waggle-mcp" \
       org.opencontainers.image.description="MCP server that gives LLMs persistent graph-structured memory" \
-      org.opencontainers.image.version="0.1.3" \
+      org.opencontainers.image.version="0.1.11" \
       org.opencontainers.image.authors="Abhigyan Shekhar" \
       org.opencontainers.image.url="https://github.com/Abhigyan-Shekhar/Waggle-mcp" \
       org.opencontainers.image.source="https://github.com/Abhigyan-Shekhar/Waggle-mcp" \
       org.opencontainers.image.licenses="MIT"
 
+# ── Cache directories (overridable via env / volume mounts) ──────────────────
+# The model is baked in; /cache is a volume for runtime persistence of
+# fine-tuned models or alternate checkpoints.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    HF_HOME=/app/.cache/huggingface \
-    SENTENCE_TRANSFORMERS_HOME=/app/.cache/sentence-transformers \
+    # Hugging Face / sentence-transformers model cache
+    HF_HOME=/cache/huggingface \
+    SENTENCE_TRANSFORMERS_HOME=/cache/sentence-transformers \
+    # Set OFFLINE only after the first run (cache is populated).
+    # The entrypoint script can flip this automatically.
+    TRANSFORMERS_OFFLINE=0 \
+    # Waggle runtime defaults
     WAGGLE_TRANSPORT=stdio \
     WAGGLE_BACKEND=sqlite \
-    WAGGLE_DB_PATH=memory.db \
+    WAGGLE_DB_PATH=/data/memory.db \
     WAGGLE_HTTP_HOST=0.0.0.0 \
     WAGGLE_HTTP_PORT=8080 \
     WAGGLE_DEFAULT_TENANT_ID=local-default \
     WAGGLE_MODEL=all-MiniLM-L6-v2 \
+    WAGGLE_STARTUP_MODE=normal \
     WAGGLE_EXTRACT_BACKEND=auto \
     WAGGLE_LOG_LEVEL=INFO
 
-WORKDIR /app
+# Copy the installed packages AND the pre-downloaded model cache from builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+COPY --from=builder /root/.cache /cache
 
+# Copy project source
+WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
+RUN pip install --no-deps -e .
 
-# 1) Pre-install CPU-only PyTorch so sentence-transformers never pulls CUDA wheels (~2 GB)
-# 2) Then install the project + neo4j extras
-RUN pip install --upgrade pip && \
-    pip install torch --index-url https://download.pytorch.org/whl/cpu && \
-    pip install ".[neo4j]" && \
-    python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
-
-# Non-root user required by Glama's security policy
+# Non-root user (required by Glama security policy)
 RUN useradd --no-create-home --shell /bin/false waggle && \
-    mkdir -p /app/data /app/.cache && \
-    chown -R waggle:waggle /app
+    mkdir -p /data /cache && \
+    chown -R waggle:waggle /app /data /cache
 
 USER waggle
 
-# Only bound when WAGGLE_TRANSPORT=http
+# /data  → database (SQLite)
+# /cache → model files (populated at build; mountable for override)
+VOLUME ["/data", "/cache"]
+
+# Only exposed when WAGGLE_TRANSPORT=http
 EXPOSE 8080
 
 ENTRYPOINT ["python", "-m", "waggle.server"]

@@ -28,8 +28,8 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route
 
 from waggle import __version__
-from waggle.config import AppConfig
-from waggle.embeddings import EmbeddingModel
+from waggle.config import AppConfig, STARTUP_MODE_FAST, STARTUP_MODE_STRICT
+from waggle.embeddings import EmbeddingModel, EMBEDDING_FREE_TOOLS, STATUS_READY, STATUS_DISABLED
 from waggle.errors import (
     AuthenticationError,
     WaggleError,
@@ -191,6 +191,9 @@ def _assert_runtime_feature_parity() -> None:
 
 def _build_backend(config: AppConfig) -> Any:
     embedding_model = EmbeddingModel(config.model_name)
+    # Disable ML entirely in fast/inspection mode.
+    if config.is_fast_mode:
+        embedding_model.disable_warmup()
     if config.backend == "sqlite":
         return MemoryGraph(
             config.db_path,
@@ -527,7 +530,9 @@ class WaggleServer:
                 description=(
                     "Automatically observe a completed user-assistant turn, extract durable information, and store it in the graph. "
                     "Call this after turns containing preferences, decisions, constraints, requirements, corrections, project facts, "
-                    "or meaningful task outcomes. Do not ask the user to trigger this."
+                    "or meaningful task outcomes. Do not ask the user to trigger this. "
+                    "Required fields: 'user_message' (the user's text) and 'assistant_response' (the assistant's reply). "
+                    "Do NOT use 'user_text' or 'assistant_text' — those field names are not accepted."
                 ),
                 inputSchema=_object_input_schema(
                     {
@@ -566,9 +571,11 @@ class WaggleServer:
                 name="get_topics",
                 description=(
                     "Detect topic clusters in the graph using community detection. Use to understand the main themes "
-                    "in memory. Returns labeled clusters with representative nodes and tags."
+                    "in memory. Returns labeled clusters with representative nodes and tags. "
+                    "Note: scope filtering (project, agent_id, session_id) is optional and silently ignored — "
+                    "topic detection always runs across the full tenant graph."
                 ),
-                inputSchema=_object_input_schema(),
+                inputSchema=_object_input_schema(_scope_properties()),
             ),
             types.Tool(
                 name="get_stats",
@@ -793,13 +800,41 @@ class WaggleServer:
         graph = self.current_graph()
         started = time.perf_counter()
         graph.ensure_tenant(graph.tenant_id)
-        # Startup should not fail tool inspection just because embedding warmup fails
-        # (e.g., transient model cache/network issues in hosted inspectors).
-        try:
-            graph.embedding_model.embed("startup validation")
-        except Exception:
-            LOGGER.exception("startup_embedding_warmup_failed")
-        self.metrics.observe("waggle_startup_validation_seconds", time.perf_counter() - started, backend=self.config.backend)
+        em = graph.embedding_model
+        if self.config.is_fast_mode:
+            # Fast mode: zero ML overhead. Schema inspection is the goal.
+            LOGGER.info(
+                "startup_fast_mode",
+                extra={"startup_mode": self.config.startup_mode},
+            )
+        elif self.config.is_strict_mode:
+            # Strict mode: block here until the model is fully loaded.
+            LOGGER.info(
+                "startup_strict_mode_waiting_for_embedding",
+                extra={"model": em.model_name},
+            )
+            try:
+                em.embed("startup validation", wait_timeout=120.0)
+                if em.warmup_status != STATUS_READY:
+                    LOGGER.warning(
+                        "startup_strict_mode_embedding_not_ready",
+                        extra={"status": em.warmup_status, "error": em.warmup_error},
+                    )
+            except Exception:
+                LOGGER.exception("startup_strict_mode_embedding_failed")
+        else:
+            # Normal mode: embedding loads in background; startup is instant.
+            # Fire a quick embed so the model is warm for the first real call;
+            # failures are non-fatal and captured in warmup_status.
+            try:
+                em.embed("startup validation", wait_timeout=0.5)
+            except Exception:
+                LOGGER.debug("startup_embedding_probe_skipped")
+        self.metrics.observe(
+            "waggle_startup_validation_seconds",
+            time.perf_counter() - started,
+            backend=self.config.backend,
+        )
 
     def build_resources(self) -> types.ListResourcesResult:
         return types.ListResourcesResult(
@@ -832,6 +867,35 @@ class WaggleServer:
             capabilities=self.server.get_capabilities(notification_options=NotificationOptions(), experimental_capabilities={}),
         )
 
+    def _check_embedding_available(
+        self, name: str, graph: Any, arguments: dict[str, Any]
+    ) -> types.CallToolResult | None:
+        """Return a degraded response if fast mode blocks semantic tools."""
+        if not self.config.is_fast_mode:
+            return None
+        if name in EMBEDDING_FREE_TOOLS:
+            return None
+        em = graph.embedding_model
+        if em.warmup_status in (STATUS_READY,):  # shouldn't happen in fast mode, but guard it
+            return None
+        # Best-effort: if the tool supports retrieval_mode, try replay fallback.
+        retrieval_mode = arguments.get("retrieval_mode", "") if name in ("query_graph", "export_context_bundle") else ""
+        if retrieval_mode in ("replay", "lexical"):
+            return None  # let it through — no embeddings needed
+        return self._tool_result(
+            f"Tool '{name}' requires semantic embeddings which are unavailable in fast/inspection mode "
+            f"(WAGGLE_STARTUP_MODE={self.config.startup_mode}). "
+            "Use retrieval_mode='replay' for transcript-only retrieval, or restart with "
+            "WAGGLE_STARTUP_MODE=normal.",
+            {
+                "status": "unavailable",
+                "reason": "fast_mode",
+                "startup_mode": self.config.startup_mode,
+                "embedding_status": STATUS_DISABLED,
+                "tool": name,
+            },
+        )
+
     def handle_tool_call(self, name: str, arguments: dict[str, Any]) -> types.CallToolResult:
         graph = self.current_graph()
         request = self._get_request()
@@ -843,6 +907,11 @@ class WaggleServer:
                 request_id = str(request_ctx.get().request_id)
             except LookupError:
                 request_id = ""
+
+        # Fast-mode guard: return structured degraded response for semantic tools.
+        fast_mode_result = self._check_embedding_available(name, graph, arguments)
+        if fast_mode_result is not None:
+            return fast_mode_result
 
         started = time.perf_counter()
         with runtime_context(
@@ -1004,11 +1073,27 @@ class WaggleServer:
                     )
                     result = self._tool_result(serialize_prime_context(context_result), self._prime_context_payload(context_result))
                 elif name == "get_topics":
+                    # Scope parameters are accepted by the schema but ignored —
+                    # topic detection runs across the full tenant graph.
                     topics = graph.get_topics()
                     result = self._tool_result(serialize_topics(topics), self._topic_payload(topics))
                 elif name == "get_stats":
                     stats = graph.get_stats()
-                    result = self._tool_result(serialize_stats(stats), self._stats_payload(stats))
+                    em = graph.embedding_model
+                    stats_payload = self._stats_payload(stats)
+                    # Augment with live embedding status — never triggers ML load.
+                    embedding_status = getattr(em, "warmup_status", "unknown")
+                    embedding_error = getattr(em, "warmup_error", "")
+                    stats_payload["embedding_status"] = embedding_status
+                    if embedding_error:
+                        stats_payload["embedding_error"] = embedding_error
+                    stats_payload["startup_mode"] = self.config.startup_mode
+                    result = self._tool_result(
+                        serialize_stats(stats)
+                        + f"\nEmbedding status: {embedding_status}"
+                        + (f" (error: {embedding_error}" + ")" if embedding_error else ""),
+                        stats_payload,
+                    )
                 elif name == "export_graph_html":
                     output_path = graph.export_graph_html(
                         output_path=arguments.get("output_path"),
@@ -1451,6 +1536,10 @@ class MCPHttpApp:
     @asynccontextmanager
     async def lifespan(self, app: Starlette):
         self.transport = StreamableHTTPServerTransport(mcp_session_id=None, is_json_response_enabled=False)
+        # Kick off background embedding warmup for HTTP transport (non-blocking).
+        em = self.app_server._root_graph.embedding_model
+        if not self.config.is_fast_mode and not em._warmup_started:
+            em.start_background_warmup()
         async with self.transport.connect() as (read_stream, write_stream):
             async with anyio.create_task_group() as tg:
                 tg.start_soon(
@@ -1612,6 +1701,19 @@ def get_app(config: AppConfig | None = None) -> WaggleServer:
 
 async def run_stdio(config: AppConfig) -> None:
     app = get_app(config)
+    graph = app._root_graph
+    em = graph.embedding_model
+    if not config.is_fast_mode and not em._warmup_started:
+        # Kick off background warmup so the first semantic call is fast.
+        em.start_background_warmup()
+    if config.is_strict_mode:
+        # Block until the model is ready before accepting any requests.
+        LOGGER.info("stdio_strict_mode_waiting_for_embedding", extra={"model": em.model_name})
+        em._ready_event.wait(timeout=120.0)
+        LOGGER.info(
+            "stdio_strict_mode_embedding_status",
+            extra={"status": em.warmup_status, "error": em.warmup_error},
+        )
     async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
         await app.server.run(read_stream, write_stream, app.initialization_options())
 
@@ -1808,6 +1910,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Explain the main tools, graph workflows, and how connected context reaches the model.",
         description="Print a detailed guide to the waggle-mcp feature surface.",
     )
+    subparsers.add_parser(
+        "doctor",
+        help="Check your Waggle installation: config files, embedding model status, DB path, and common mistakes.",
+        description=(
+            "Inspect the waggle-mcp environment and surface any configuration issues before they become runtime errors. "
+            "Checks: config file locations per MCP client, embedding model cache, DB path writability, "
+            "WAGGLE_STARTUP_MODE, stdout encoding (Windows), and known API gotchas."
+        ),
+    )
     return parser
 
 
@@ -1896,7 +2007,181 @@ def _run_admin_command(config: AppConfig, args: argparse.Namespace) -> int:
     if args.command == "features":
         print(_FEATURES_GUIDE)
         return 0
+    if args.command == "doctor":
+        return _run_doctor(config)
     raise ValidationFailure(f"Unknown command: {args.command}")
+
+
+# ---------------------------------------------------------------------------
+# doctor command
+# ---------------------------------------------------------------------------
+
+_KNOWN_CONFIG_PATHS: list[tuple[str, str]] = [
+    # (label, path_template)
+    # %APPDATA% and ~ are expanded at runtime
+    ("Claude Desktop (macOS/Linux)", "~/.config/claude/claude_desktop_config.json"),
+    ("Claude Desktop (macOS alt)", "~/Library/Application Support/Claude/claude_desktop_config.json"),
+    ("Claude Desktop (Windows)", "%APPDATA%\\Claude\\claude_desktop_config.json"),
+    ("Cursor (macOS/Linux)", "~/.cursor/mcp.json"),
+    ("Cursor (Windows)", "%APPDATA%\\Cursor\\User\\mcp.json"),
+    ("Antigravity AI agent (macOS/Linux)", "~/.gemini/antigravity/mcp_config.json"),
+    ("Antigravity AI agent (Windows)", "%USERPROFILE%\\.gemini\\antigravity\\mcp_config.json"),
+    ("VS Code extension (Windows)", "%APPDATA%\\Antigravity\\User\\mcp.json"),
+    ("Codex", "~/.codex/config.json"),
+]
+
+_DOCTOR_KNOWN_GOTCHAS = """\
+Known API gotchas (from the Waggle field error log):
+  • observe_conversation requires fields 'user_message' and 'assistant_response'.
+    Do NOT use 'user_text' / 'assistant_text' — those will be rejected.
+  • get_topics does not support scope filtering. Passing 'project' etc. used to
+    cause "additional properties" errors. It now accepts (and ignores) scope fields.
+  • Use the official 'mcp' Python package for stdio clients, not hand-rolled JSON-RPC.
+    Install: pip install mcp
+    Use:     from mcp import ClientSession, StdioServerParameters
+             from mcp.client.stdio import stdio_client
+  • On Windows, stdio framing requires the official mcp client; raw subprocess I/O
+    with manual \\n line endings will produce garbled or dropped messages.
+  • Set WAGGLE_MODEL=deterministic for offline/offline-first environments.
+    The default (all-MiniLM-L6-v2) downloads ~420 MB on first run and will
+    block store_node indefinitely if no network is available.
+"""
+
+
+def _run_doctor(config: AppConfig) -> int:
+    """waggle-mcp doctor — surface configuration and environment issues."""
+    issues: list[str] = []
+    ok_items: list[str] = []
+
+    print()
+    print(_c(_BOLD, "waggle-mcp doctor"))
+    print(_c(_CYAN, "─" * 50))
+
+    # ── 1. Config file locations ─────────────────────────────────────────────
+    print(_c(_BOLD, "\n[1] MCP client config files"))
+    waggle_found_in: list[str] = []
+    for label, template in _KNOWN_CONFIG_PATHS:
+        raw = template.replace("%APPDATA%", os.environ.get("APPDATA", "")).replace(
+            "%USERPROFILE%", str(Path.home())
+        )
+        path = Path(raw).expanduser()
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+                servers = data.get("mcpServers", data.get("tools", {}) if isinstance(data, dict) else {})
+                if isinstance(servers, dict) and "waggle" in servers:
+                    waggle_found_in.append(label)
+                    _ok(f"{label}\n     {path}  [waggle entry found]")
+                else:
+                    print(f"  {_c(_CYAN, chr(0x2022))} {label}\n     {path}  [exists, no waggle entry]")
+            except Exception:
+                print(f"  {_c(_CYAN, chr(0x2022))} {label}\n     {path}  [exists, could not parse]")
+        # only show missing paths that are plausible for this platform
+        elif (sys.platform == "darwin" and ("macOS" in label or "Cursor" in label or "Antigravity" in label or "Codex" in label)) or \
+             (sys.platform == "win32" and "Windows" in label) or \
+             (sys.platform.startswith("linux") and ("Linux" in label or "Cursor" in label)):
+            print(f"  {_c(_CYAN, chr(0x2022))} {label}\n     {path}  [not found]")
+
+    if not waggle_found_in:
+        issues.append(
+            "No MCP client config file contains a 'waggle' server entry. "
+            "Run 'waggle-mcp init' to create one, or add it manually."
+        )
+    else:
+        ok_items.append(f"Waggle found in: {', '.join(waggle_found_in)}")
+
+    # ── 2. DB path ───────────────────────────────────────────────────────────
+    print(_c(_BOLD, "\n[2] Database path"))
+    db_path = Path(config.db_path)
+    db_dir = db_path.parent
+    if db_path.exists():
+        _ok(f"DB file exists: {db_path}")
+        ok_items.append("DB file found")
+    elif db_dir.exists():
+        _ok(f"DB directory exists (file will be created on first run): {db_path}")
+        ok_items.append("DB directory writable")
+    else:
+        issues.append(
+            f"DB directory does not exist: {db_dir}. "
+            "Create it with: mkdir -p <dir>"
+        )
+        _fail(f"DB directory missing: {db_dir}")
+
+    # ── 3. Embedding model ───────────────────────────────────────────────────
+    print(_c(_BOLD, "\n[3] Embedding model"))
+    model_name = config.model_name
+    hf_home = os.environ.get("HF_HOME") or os.environ.get("SENTENCE_TRANSFORMERS_HOME") or str(Path.home() / ".cache" / "huggingface")
+    st_cache = Path(os.environ.get("SENTENCE_TRANSFORMERS_HOME", Path(hf_home) / "hub"))
+
+    if model_name.strip().lower() in {"fake", "fake-model", "deterministic", "offline-demo"}:
+        _ok(f"Model: {model_name!r}  (deterministic — no download, always offline-safe)")
+        ok_items.append("Deterministic model — no download needed")
+    else:
+        # Heuristic: look for a cached sentence-transformers directory
+        safe_name = model_name.replace("/", "_").replace("\\", "_")
+        possible_dirs = [
+            st_cache / f"models--{safe_name.replace('_', '--', 1)}",
+            st_cache / safe_name,
+            Path(hf_home) / "hub" / f"models--{safe_name.replace('_', '--', 1)}",
+        ]
+        cached = any(p.exists() for p in possible_dirs)
+        if cached:
+            _ok(f"Model: {model_name!r}  (cached locally — fast startup)")
+            ok_items.append("Embedding model cached")
+        else:
+            print(
+                f"  {_c(_CYAN, chr(0x2139))} Model: {model_name!r}  — NOT found in local cache.\n"
+                f"    First store_node/query_graph call will download ~420 MB from HuggingFace.\n"
+                f"    To avoid: set WAGGLE_MODEL=deterministic, or pre-download with:\n"
+                f"      python -c \"from sentence_transformers import SentenceTransformer; SentenceTransformer('{model_name}')\""
+            )
+            issues.append(
+                f"Embedding model '{model_name}' not found in cache. "
+                "First semantic call will block for a network download. "
+                "Set WAGGLE_MODEL=deterministic for offline-safe mode."
+            )
+
+    # ── 4. WAGGLE_STARTUP_MODE ───────────────────────────────────────────────
+    print(_c(_BOLD, "\n[4] Startup mode"))
+    print(f"  WAGGLE_STARTUP_MODE = {config.startup_mode!r}")
+    if config.is_fast_mode:
+        _ok("fast mode: zero ML overhead. Schema/tool listing only. Semantic tools return 'unavailable'.")
+    elif config.is_strict_mode:
+        _ok("strict mode: server blocks on startup until embedding model is ready.")
+    else:
+        _ok("normal mode: embedding loads in background. First semantic call may wait up to ~30 s.")
+
+    # ── 5. Windows stdout encoding ───────────────────────────────────────────
+    if sys.platform == "win32":
+        print(_c(_BOLD, "\n[5] Windows stdout encoding"))
+        enc = getattr(sys.stdout, "encoding", "unknown")
+        if enc.lower().replace("-", "") in ("utf8", "utf8"):
+            _ok(f"stdout encoding: {enc}")
+        else:
+            _fail(
+                f"stdout encoding is {enc!r} (not UTF-8). "
+                "Unicode characters (emoji, accented text) will cause UnicodeEncodeError.\n"
+                "    Fix: run with 'python -X utf8' or add at script top:\n"
+                "      import sys; sys.stdout.reconfigure(encoding='utf-8')"
+            )
+            issues.append(f"Windows stdout encoding is {enc!r} — set PYTHONUTF8=1 or use python -X utf8.")
+
+    # ── 6. Known gotchas ─────────────────────────────────────────────────────
+    print(_c(_BOLD, "\n[6] Known API gotchas"))
+    print(_DOCTOR_KNOWN_GOTCHAS)
+
+    # ── Summary ──────────────────────────────────────────────────────────────
+    print(_c(_BOLD, "─" * 50))
+    if issues:
+        print(_c(_RED, f"Found {len(issues)} issue(s):"))
+        for i, issue in enumerate(issues, 1):
+            print(f"  {i}. {issue}")
+        print()
+        return 1
+    else:
+        print(_c(_GREEN, f"All checks passed ({len(ok_items)} OK). Waggle looks healthy."))
+        print()
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -2273,6 +2558,17 @@ def _run_init() -> int:
 
 
 def main() -> None:
+    # ── Windows UTF-8 guard (Error 3 from field bug log) ────────────────────
+    # Windows consoles default to cp1252. Unicode log lines / emoji cause
+    # UnicodeEncodeError that crashes test scripts or corrupts stdio framing.
+    if sys.platform == "win32":
+        try:
+            if hasattr(sys.stdout, "reconfigure"):
+                sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            if hasattr(sys.stderr, "reconfigure"):
+                sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass  # best-effort; don't break startup over encoding
     _assert_runtime_feature_parity()
     parser = _build_parser()
     args = parser.parse_args()
@@ -2284,6 +2580,10 @@ def main() -> None:
     if command == "features":
         print(_FEATURES_GUIDE)
         return
+    if command == "doctor":
+        # Doctor only needs the config — not a live backend connection.
+        config = AppConfig.from_env()
+        sys.exit(_run_doctor(config))
 
     config = AppConfig.from_env()
     log_stream = sys.stderr if config.transport == "stdio" else sys.stdout

@@ -88,10 +88,17 @@ pipx install waggle-mcp
 
 # 2. Run the interactive setup
 waggle-mcp init
+
+# 3. Verify everything looks healthy
+waggle-mcp doctor
 ```
 *(If you don't have `pipx`, install it via `brew install pipx && pipx ensurepath`.)*
 
 Running `init` will detect your MCP client (Codex, Claude, Cursor, or Antigravity), write the necessary configuration, and initialize your local database. Restart your client, and you're ready to go.
+
+`waggle-mcp doctor` is your first stop if anything doesn't work — it checks config file locations, the embedding model cache, DB path, and surfaces the most common API mistakes.
+
+> **Windows users:** Run all commands with `python -X utf8` or set `PYTHONUTF8=1` in your environment to avoid `UnicodeEncodeError` from emoji in log output.
 
 For Codex, `waggle-mcp init` also writes a managed Waggle block into `AGENTS.md` in the current workspace so automatic memory is enabled by default for that repo.
 
@@ -126,12 +133,16 @@ Use this shared JSON config shape for clients that accept `mcpServers` JSON (rec
         "WAGGLE_BACKEND": "sqlite",
         "WAGGLE_DB_PATH": "~/.waggle/memory.db",
         "WAGGLE_DEFAULT_TENANT_ID": "local-default",
-        "WAGGLE_MODEL": "all-MiniLM-L6-v2"
+        "WAGGLE_MODEL": "all-MiniLM-L6-v2",
+        "WAGGLE_STARTUP_MODE": "normal"
       }
     }
   }
 }
 ```
+
+> **First run takes ~30 s** — `all-MiniLM-L6-v2` (~420 MB) downloads on first use.
+> To skip the download entirely, set `"WAGGLE_MODEL": "deterministic"` (offline-safe, instant start, slightly lower retrieval quality).
 
 <details>
 <summary>Claude Desktop / Antigravity / Cursor / Claude Code setup details</summary>
@@ -141,8 +152,11 @@ Use this shared JSON config shape for clients that accept `mcpServers` JSON (rec
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
 **Antigravity**
-- Open agent panel → `···` → **Manage MCP Servers** → **View raw config**
-- Paste the same JSON block above.
+- The **AI agent** reads: `~/.gemini/antigravity/mcp_config.json` (macOS/Linux) or `%USERPROFILE%\.gemini\antigravity\mcp_config.json` (Windows)
+- The VS Code extension panel reads a **different** file (`%APPDATA%\Antigravity\User\mcp.json`) — adding waggle there will NOT make it available to the AI agent.
+- Open the correct file and add the `waggle` block from above.
+
+> Run `waggle-mcp doctor` to see exactly which config files exist and which ones have a waggle entry.
 
 **Cursor**
 - `Cursor Settings -> Features -> MCP Servers -> + Add`
@@ -294,11 +308,24 @@ Waggle includes a built-in CLI for setup, maintenance, and learning the memory s
 |---|---|
 | `waggle-mcp --help` | Show all available commands, options, and usage examples. |
 | `waggle-mcp features` | **Best first command** — Explain the main tools, graph workflows, and how connected context reaches the model. |
+| `waggle-mcp doctor` | **Run this if something isn't working** — checks config files, model cache, DB path, Windows encoding, and API gotchas. |
 | `waggle-mcp init` | Interactive setup wizard to configure Codex, Claude, Cursor, or Antigravity. |
 | `waggle-mcp serve` | Run the MCP server (usually started automatically by your client). |
 | `waggle-mcp ingest-transcript-handoff` | Ingest a rollover transcript and export a handoff bundle for the next window or IDE. |
 | `waggle-mcp export-context-bundle` | Export a portable Markdown/JSON context pack for another AI. |
 | `waggle-mcp export-markdown-vault` | Export your memory graph as an Obsidian-style vault. |
+
+### `WAGGLE_STARTUP_MODE`
+
+Controls how aggressively the embedding model is loaded at startup:
+
+| Value | Behaviour | Best for |
+|---|---|---|
+| `normal` *(default)* | Model loads in background thread; server responds immediately | Daily use |
+| `fast` | ML never loads; semantic tools return `unavailable` | Schema inspection, tool listing |
+| `strict` | Server blocks until model is fully loaded before serving | Production deployments requiring guaranteed readiness |
+
+Set in your client config: `"WAGGLE_STARTUP_MODE": "fast"`.
 
 For advanced commands (tenant management, API keys, Neo4j migration), see the full help output:
 ```bash
@@ -497,6 +524,30 @@ Detailed artifacts and methodology live in:
 - **Deduplication is fixture-backed, not universal semantic equivalence**: the current 32-case fixture covers common memory-node paraphrases and false friends, but broader production text can still require additional aliases or stricter domain guards.
 
 For operational details, scaling considerations, tool-level behavior, and the full MCP feature surface, see [docs/reference.md](./docs/reference.md).
+
+---
+
+## Troubleshooting
+
+Run `waggle-mcp doctor` first — it catches the most common issues automatically.
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `store_node` / `query_graph` hangs forever | Embedding model downloading on first run (~420 MB) | Set `WAGGLE_MODEL=deterministic` for instant offline mode, or wait for download to finish |
+| `UnicodeEncodeError: 'charmap' codec...` | Windows stdout not UTF-8 | Run with `python -X utf8` or set `PYTHONUTF8=1` |
+| `Additional properties are not allowed ('user_text', 'assistant_text' were unexpected)` | Using old pre-v0.2 field names | Use `user_message` + `assistant_response` (not `user_text`/`assistant_text`) |
+| `Additional properties are not allowed ('project' was unexpected)` in `get_topics` | Fixed in current version | Update: `pipx upgrade waggle-mcp` |
+| Waggle registered but AI agent doesn't see it (Antigravity) | Added to wrong config file | Agent reads `~/.gemini/antigravity/mcp_config.json`, **not** the VS Code extension file |
+| Stdio framing garbled / dropped messages (Windows) | Hand-rolled JSON-RPC | Use the official `mcp` Python client: `pip install mcp` |
+| `waggle-mcp: command not found` | pipx bin dir not on PATH | Run `pipx ensurepath` then restart terminal |
+
+### Checking which config file the agent reads
+
+```bash
+waggle-mcp doctor
+```
+
+Section `[1] MCP client config files` lists every known config path, whether it exists, and whether it contains a waggle entry. The Antigravity AI agent path (`~/.gemini/antigravity/mcp_config.json`) is listed separately from the VS Code extension path.
 
 ---
 

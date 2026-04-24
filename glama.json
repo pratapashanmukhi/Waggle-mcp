@@ -12,5 +12,31 @@
     "local-first",
     "sqlite"
   ],
-  "homepage": "https://github.com/Abhigyan-Shekhar/Waggle-mcp"
+  "homepage": "https://github.com/Abhigyan-Shekhar/Waggle-mcp",
+  "mcpServers": {
+    "waggle": {
+      "comment": "Recommended: Docker (pre-baked model, ~3 s cold start)",
+      "transport": "stdio",
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-v", "waggle-data:/data",
+        "-v", "waggle-cache:/cache",
+        "-e", "WAGGLE_STARTUP_MODE=normal",
+        "ghcr.io/abhigyan-shekhar/waggle-mcp:latest"
+      ]
+    },
+    "waggle-fast": {
+      "comment": "Fast / inspection mode — schema listing only, zero ML overhead",
+      "transport": "stdio",
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-v", "waggle-data:/data",
+        "-v", "waggle-cache:/cache",
+        "-e", "WAGGLE_STARTUP_MODE=fast",
+        "ghcr.io/abhigyan-shekhar/waggle-mcp:latest"
+      ]
+    }
+  }
 }
