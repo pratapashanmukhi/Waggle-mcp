@@ -1,10 +1,12 @@
 .venv/
 .pytest_cache/
 __pycache__/
+.DS_Store
 *.pyc
 *.pyo
 *.pyd
 dist/
+build/
 *.aux
 *.log
 *.out

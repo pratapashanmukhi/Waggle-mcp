@@ -41,6 +41,9 @@ class AppConfig:
 
     @classmethod
     def from_env(cls) -> "AppConfig":
+        # Render (and other PaaS providers) commonly inject a dynamic `PORT` env var.
+        # Prefer `WAGGLE_HTTP_PORT` when set, otherwise fall back to `PORT`.
+        resolved_http_port = os.environ.get("WAGGLE_HTTP_PORT") or os.environ.get("PORT") or "8080"
         config = cls(
             backend=os.environ.get("WAGGLE_BACKEND", "sqlite").strip().lower(),
             transport=os.environ.get("WAGGLE_TRANSPORT", "stdio").strip().lower(),
@@ -48,7 +51,7 @@ class AppConfig:
             db_path=os.environ.get("WAGGLE_DB_PATH", DEFAULT_DB_PATH),
             default_tenant_id=os.environ.get("WAGGLE_DEFAULT_TENANT_ID", "local-default").strip(),
             http_host=os.environ.get("WAGGLE_HTTP_HOST", "0.0.0.0"),
-            http_port=int(os.environ.get("WAGGLE_HTTP_PORT", "8080")),
+            http_port=int(resolved_http_port),
             log_level=os.environ.get("WAGGLE_LOG_LEVEL", "INFO"),
             rate_limit_rpm=int(os.environ.get("WAGGLE_RATE_LIMIT_RPM", "120")),
             write_rate_limit_rpm=int(os.environ.get("WAGGLE_WRITE_RATE_LIMIT_RPM", "60")),
