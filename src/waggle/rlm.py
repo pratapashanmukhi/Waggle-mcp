@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 import json
 import re
 import urllib.error
@@ -15,7 +15,8 @@ from rlm.clients.base_lm import BaseLM
 from rlm.core.types import ModelUsageSummary, RLMChatCompletion, UsageSummary
 from rlm.logger import RLMLogger
 
-from waggle.graph import MemoryGraph
+if TYPE_CHECKING:
+    from waggle.graph import MemoryGraph
 
 
 DEFAULT_WAGGLE_RLM_SYSTEM_PROMPT = (
