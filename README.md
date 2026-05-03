@@ -148,6 +148,53 @@ Conflicts or superseded context:
 
 ---
 
+## RLM-style Benchmark Suite
+
+Waggle is evaluated using the same benchmark families as the [Recursive Language Models paper](https://arxiv.org/abs/2512.24601): S-NIAH, BrowseComp-Plus, OOLONG, OOLONG-Pairs, and CodeQA. The first implementation maps each family to deterministic synthetic Waggle memory tasks.
+
+> **Warning:** This benchmark uses synthetic data mapped to Waggle's graph/transcript environment. It should not be compared numerically to the RLM paper until the exact public datasets and matching model setup are run.
+
+| Family | RLM paper equivalent | What it tests |
+|---|---|---|
+| S-NIAH-style | RULER S-NIAH | Retrieve one fact from N distractors — O(1) |
+| BrowseComp-Plus-style | BrowseComp-Plus | Multi-hop QA across 3 linked nodes |
+| OOLONG-style | OOLONG | Aggregate N entries — O(n) |
+| OOLONG-Pairs-style | OOLONG-Pairs | Pairwise conflict reasoning — O(n²) |
+| CodeQA-style | LongBench-v2 CodeQA | Codebase/repo understanding |
+
+The main comparison is: **raw context dump** vs **single query_graph** vs **recursive build_context**.
+
+**Example run:**
+
+```bash
+python benchmarks/rlm_style_waggle_eval.py \
+  --db /tmp/waggle_rlm_eval \
+  --scales 128 512 2048 \
+  --methods raw_context query_graph prime_context build_context \
+  --token-budget 1200 \
+  --output benchmark_results/
+```
+
+**Example results (scale=128):**
+
+| Benchmark family | Scale | Method | Score | Tokens returned |
+|---|---:|---|---:|---:|
+| S-NIAH-style | 128 | raw_context | 1.000 | 943 |
+| S-NIAH-style | 128 | query_graph | 1.000 | 93 |
+| S-NIAH-style | 128 | build_context | 1.000 | 181 |
+| OOLONG-Pairs-style | 128 | raw_context | 0.000 | 948 |
+| OOLONG-Pairs-style | 128 | query_graph | 0.000 | 98 |
+| OOLONG-Pairs-style | 128 | build_context | **1.000** | 515 |
+| CodeQA-style | 128 | raw_context | 0.000 | 920 |
+| CodeQA-style | 128 | query_graph | 1.000 | 178 |
+| CodeQA-style | 128 | build_context | **1.000** | 535 |
+
+Key finding: `build_context` uses **19–58% of raw_context tokens** at scale=128 while matching or exceeding accuracy — particularly on pairwise conflict reasoning and codebase understanding where explicit edge traversal matters.
+
+Output files: `benchmark_results/rlm_style_waggle_results.csv`, `.md`, `_summary.json`
+
+---
+
 ## How It Works
 
 ```

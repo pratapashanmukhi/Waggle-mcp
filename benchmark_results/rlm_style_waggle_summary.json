@@ -1,0 +1,98 @@
+{
+  "warning": "This benchmark follows the benchmark families used in the RLM paper, but uses deterministic synthetic memory tasks. Do not compare numerically to the RLM paper.",
+  "total_cases": 24,
+  "families": {
+    "BrowseComp-Plus-style": {
+      "raw_context": {
+        "avg_score": 1.0,
+        "avg_f1": 1.0,
+        "avg_tokens": 175.0,
+        "avg_latency_ms": 0.7,
+        "count": 2
+      },
+      "query_graph": {
+        "avg_score": 1.0,
+        "avg_f1": 1.0,
+        "avg_tokens": 98.0,
+        "avg_latency_ms": 1.25,
+        "count": 2
+      },
+      "build_context": {
+        "avg_score": 1.0,
+        "avg_f1": 1.0,
+        "avg_tokens": 193.0,
+        "avg_latency_ms": 8.649999999999999,
+        "count": 2
+      }
+    },
+    "CodeQA-style": {
+      "raw_context": {
+        "avg_score": 0.5,
+        "avg_f1": 0.75,
+        "avg_tokens": 873.0,
+        "avg_latency_ms": 1.8,
+        "count": 2
+      },
+      "query_graph": {
+        "avg_score": 1.0,
+        "avg_f1": 1.0,
+        "avg_tokens": 178.0,
+        "avg_latency_ms": 3.65,
+        "count": 2
+      },
+      "build_context": {
+        "avg_score": 1.0,
+        "avg_f1": 1.0,
+        "avg_tokens": 456.5,
+        "avg_latency_ms": 24.1,
+        "count": 2
+      }
+    },
+    "OOLONG-Pairs-style": {
+      "raw_context": {
+        "avg_score": 0.5,
+        "avg_f1": 0.5,
+        "avg_tokens": 779.5,
+        "avg_latency_ms": 2.0,
+        "count": 2
+      },
+      "query_graph": {
+        "avg_score": 0.0,
+        "avg_f1": 0.0,
+        "avg_tokens": 97.5,
+        "avg_latency_ms": 3.45,
+        "count": 2
+      },
+      "build_context": {
+        "avg_score": 1.0,
+        "avg_f1": 1.0,
+        "avg_tokens": 463.0,
+        "avg_latency_ms": 45.75,
+        "count": 2
+      }
+    },
+    "S-NIAH-style": {
+      "raw_context": {
+        "avg_score": 1.0,
+        "avg_f1": 1.0,
+        "avg_tokens": 757.5,
+        "avg_latency_ms": 2.55,
+        "count": 2
+      },
+      "query_graph": {
+        "avg_score": 1.0,
+        "avg_f1": 1.0,
+        "avg_tokens": 93.0,
+        "avg_latency_ms": 3.55,
+        "count": 2
+      },
+      "build_context": {
+        "avg_score": 1.0,
+        "avg_f1": 1.0,
+        "avg_tokens": 216.0,
+        "avg_latency_ms": 15.0,
+        "count": 2
+      }
+    }
+  }
+}
