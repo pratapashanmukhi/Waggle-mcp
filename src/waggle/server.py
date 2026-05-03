@@ -16,6 +16,7 @@ import uuid
 import webbrowser
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -132,6 +133,11 @@ WRITE_HEAVY_TOOLS = {
     "store_edge",
     "decompose_and_store",
     "observe_conversation",
+    # git-vocabulary names (canonical)
+    "pull",
+    "merge",
+    "grep",
+    # legacy aliases kept for backward compatibility
     "import_graph_backup",
     "import_abhi",
     "merge_abhi",
@@ -156,7 +162,27 @@ REQUIRED_RUNTIME_METHODS = (
     "timeline",
     "list_conflicts",
     "resolve_conflict",
+    "edge_quality_report",
 )
+
+# Mapping from legacy tool names to their canonical git-vocabulary equivalents.
+# Both names are accepted; the dispatch normalises to the canonical name.
+# Parametric alias table: legacy tool name → (canonical name, default args).
+# Default args are merged with caller-provided args; caller wins on collision.
+# This means export_context_bundle literally IS commit --commit_format=bundle,
+# and callers who pass explicit args still get what they asked for.
+_TOOL_ALIASES: dict[str, tuple[str, dict[str, object]]] = {
+    "export_graph_backup":  ("commit", {"commit_format": "backup"}),
+    "export_abhi":          ("commit", {"commit_format": "abhi"}),
+    "export_context_bundle":("commit", {"commit_format": "bundle"}),
+    "import_graph_backup":  ("pull",   {"pull_format": "backup"}),
+    "import_abhi":          ("pull",   {"pull_format": "abhi"}),
+    "diff_abhi":            ("diff",   {}),
+    "merge_abhi":           ("merge",  {}),
+    "validate_abhi":        ("fsck",   {}),
+    "inspect_abhi":         ("show",   {}),
+    "query_abhi":           ("grep",   {}),
+}
 
 _EXPORT_SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("OpenAI-style API key", re.compile(r"\bsk-[A-Za-z0-9]{20,}\b")),
@@ -373,6 +399,7 @@ def _build_backend(config: AppConfig) -> Any:
             config.db_path,
             embedding_model,
             tenant_id=config.default_tenant_id,
+            dedup_similarity_threshold=config.dedup_threshold,
             recency_half_life_days=config.recency_half_life_days,
             tiered_retrieval=config.tiered_retrieval,
             tiered_retrieval_top_k_windows=config.tiered_retrieval_top_k_windows,
@@ -502,6 +529,62 @@ class WaggleServer:
                 ),
             ),
             types.Tool(
+                name="canonicalize_node",
+                description=(
+                    "Manually merge multiple nodes into a single canonical node. "
+                    "All aliases from the merged nodes flow into the canonical node's aliases. "
+                    "All edges pointing to/from merged nodes are re-pointed to the canonical node. "
+                    "Merged nodes are deleted.  Idempotent: merging an already-merged node is a no-op. "
+                    "Use this after reviewing dedup_candidates to resolve ambiguous duplicates."
+                ),
+                inputSchema=_object_input_schema(
+                    {
+                        "node_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of node IDs to merge into the canonical node.",
+                        },
+                        "canonical_id": {"type": "string", "description": "The canonical node ID to merge into."},
+                        **_scope_properties(),
+                    },
+                    required=["node_ids", "canonical_id"],
+                ),
+            ),
+            types.Tool(
+                name="dedup_candidates",
+                description=(
+                    "Return pairs of nodes whose embeddings are above a threshold but below the "
+                    "auto-merge threshold.  Intended for human review before calling canonicalize_node. "
+                    "Returns pairs sorted by descending similarity so the most likely duplicates appear first."
+                ),
+                inputSchema=_object_input_schema(
+                    {
+                        "project": {
+                            "type": "string",
+                            "default": "",
+                            "description": "Optional project scope to filter candidates.",
+                        },
+                        "agent_id": {
+                            "type": "string",
+                            "default": "",
+                            "description": "Optional agent scope to filter candidates.",
+                        },
+                        "session_id": {
+                            "type": "string",
+                            "default": "",
+                            "description": "Optional session scope to filter candidates.",
+                        },
+                        "threshold": {
+                            "type": "number",
+                            "minimum": 0.85,
+                            "maximum": 0.99,
+                            "default": 0.85,
+                            "description": "Minimum cosine similarity to report (default 0.85).",
+                        },
+                    },
+                ),
+            ),
+            types.Tool(
                 name="aggregate_graph",
                 description=(
                     "Retrieve a broad set of nodes bypassing standard semantic limits, optimized for "
@@ -522,6 +605,15 @@ class WaggleServer:
                         },
                         "max_nodes": {"type": "integer", "description": "Maximum number of nodes to return (default 100, up to 1000)."},
                         "max_depth": {"type": "integer", "description": "Relationship traversal depth around matching nodes."},
+                        "include_invalidated": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "When true, include nodes whose valid_to has passed. Default false excludes expired nodes.",
+                        },
+                        "as_of": {
+                            "type": "string",
+                            "description": "ISO-8601 datetime. When provided, return only nodes valid at that point in time (overrides include_invalidated).",
+                        },
                         **_scope_properties(),
                     },
                 ),
@@ -532,7 +624,9 @@ class WaggleServer:
                     "Automatically search the memory graph before answering questions that may depend on prior context, "
                     "user preferences, project decisions, constraints, or earlier conversation state. "
                     "Returns a serialized subgraph with matching nodes and their connected neighborhood. "
-                    "Understands temporal references such as 'recently', 'latest', 'originally', and 'last week'."
+                    "Uses hybrid retrieval (transcript + graph) by default for robust fallback. "
+                    "Understands temporal references such as 'recently', 'latest', 'originally', and 'last week'. "
+                    "Benchmark modes: use retrieval_mode='graph' for graph-only (no verbatim fallback), 'verbatim' for transcript-only."
                 ),
                 inputSchema=_object_input_schema(
                     {
@@ -561,6 +655,15 @@ class WaggleServer:
                             "enum": ["graph", "verbatim", "hybrid"],
                             "default": "hybrid",
                             "description": "Retrieval strategy: graph-only, verbatim transcript retrieval, or hybrid fusion with reranking.",
+                        },
+                        "include_invalidated": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "When true, include nodes whose valid_to has passed. Default false excludes expired nodes.",
+                        },
+                        "as_of": {
+                            "type": "string",
+                            "description": "ISO-8601 datetime. When provided, return only nodes valid at that point in time (overrides include_invalidated).",
                         },
                     },
                     required=["query"],
@@ -755,7 +858,9 @@ class WaggleServer:
                 name="resolve_conflict",
                 description=(
                     "Mark a contradiction or update edge as resolved without deleting the underlying history. "
-                    "Use after deciding how competing memories should be interpreted. Returns the resolved conflict entry."
+                    "Use after deciding how competing memories should be interpreted. Returns the resolved conflict entry. "
+                    "When winner is provided and the edge is CONTRADICTS or UPDATES, the losing node's valid_to is set to now, "
+                    "excluding it from future default queries."
                 ),
                 inputSchema=_object_input_schema(
                     {
@@ -764,6 +869,11 @@ class WaggleServer:
                             "type": "string",
                             "default": "",
                             "description": "Optional human-readable note explaining the resolution.",
+                        },
+                        "winner": {
+                            "type": "string",
+                            "description": "Optional node ID of the winning node. Must be source_id or target_id of the edge. "
+                                           "When provided, the losing node's valid_to is set to now, superseding it.",
                         },
                     },
                     required=["edge_id"],
@@ -818,9 +928,11 @@ class WaggleServer:
             types.Tool(
                 name="observe_conversation",
                 description=(
-                    "Automatically observe a completed user-assistant turn, extract durable information, and store it in the graph. "
-                    "Call this after turns containing preferences, decisions, constraints, requirements, corrections, project facts, "
+                    "Automatically observe a completed user-assistant turn. ALWAYS persists the verbatim turn first. "
+                    "Then runs extraction (graph inference) as optional enrichment. If extraction fails, the verbatim turn is still stored. "
+                    "Use after turns containing preferences, decisions, constraints, requirements, corrections, project facts, "
                     "or meaningful task outcomes. Do not ask the user to trigger this. "
+                    "Returns: turn_id, verbatim_stored (bool), nodes_extracted (count), edges_inferred (count), extraction_errors (non-fatal). "
                     "Required fields: 'user_message' (the user's text) and 'assistant_response' (the assistant's reply). "
                     "Do NOT use 'user_text' or 'assistant_text' — those field names are not accepted."
                 ),
@@ -920,156 +1032,92 @@ class WaggleServer:
                 ),
             ),
             types.Tool(
-                name="export_graph_backup",
+                name="commit",
                 description=(
-                    "Export the current graph as a portable JSON backup. Use for migration, restore drills, or offline archive. "
-                    "Returns backup path, schema version, and object counts."
+                    "Snapshot the current memory graph to a portable file (waggle commit). "
+                    "Exports a JSON backup for migration, restore drills, or offline archive. "
+                    "Use commit_format='abhi' (default) for a full .abhi export, or 'backup' for a raw JSON backup. "
+                    "Returns the output path, schema version, and object counts."
                 ),
                 inputSchema=_object_input_schema(
                     {
                         "output_path": {
                             "type": "string",
-                            "description": "Optional destination JSON file path. If omitted, Waggle chooses an export path.",
-                        }
-                    }
-                ),
-            ),
-            types.Tool(
-                name="export_abhi",
-                description=(
-                    "Export the current memory graph as a validated .abhi file. "
-                    "The file includes graph data, schema, constraints, AI rules, versions, queries, integrity metadata, and event definitions."
-                ),
-                inputSchema=_object_input_schema(
-                    {
-                        "output_path": {
+                            "description": "Optional destination file path. If omitted, Waggle chooses an export path.",
+                        },
+                        "commit_format": {
                             "type": "string",
-                            "description": "Optional destination .abhi file path. If omitted, Waggle chooses an export path.",
+                            "enum": ["abhi", "backup", "bundle"],
+                            "default": "abhi",
+                            "description": (
+                                "'abhi' (default) exports a validated .abhi memory file; "
+                                "'backup' exports a raw JSON backup; "
+                                "'bundle' exports a portable Markdown/JSON context bundle."
+                            ),
                         },
                         "force": {
                             "type": "boolean",
                             "default": False,
                             "description": "Override the secret-scan refusal if transcript records contain likely secrets. Use only after deliberate review.",
                         },
+                        "include_low_confidence_edges": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "When true, include RELATES_TO edges with edge_confidence < 0.7 that are normally filtered from exports.",
+                        },
                         **_scope_properties(),
                     }
                 ),
             ),
             types.Tool(
-                name="export_context_bundle",
+                name="pull",
                 description=(
-                    "Export a portable Markdown and/or JSON context bundle for handing memory to another AI or a human. "
-                    "Use for cross-tool context transfer, audits, and resumable work. Returns file paths, counts, and render hints."
-                ),
-                inputSchema=_object_input_schema(
-                    {
-                        "mode": {
-                            "type": "string",
-                            "enum": ["prime", "query", "graph"],
-                            "default": "prime",
-                            "description": "Bundle selection mode: scoped prime context, query result, or broad graph export.",
-                        },
-                        "query": {
-                            "type": "string",
-                            "description": "Natural-language query used when mode is 'query'.",
-                        },
-                        **_scope_properties(),
-                        "max_nodes": {
-                            "type": "integer",
-                            "default": 25,
-                            "minimum": 1,
-                            "description": "Maximum number of nodes to include.",
-                        },
-                        "max_depth": {
-                            "type": "integer",
-                            "default": 2,
-                            "minimum": 0,
-                            "description": "Relationship traversal depth for query or prime context modes.",
-                        },
-                        "retrieval_mode": {
-                            "type": "string",
-                            "enum": ["graph", "verbatim", "hybrid"],
-                            "default": "hybrid",
-                            "description": "Retrieval strategy for query mode: graph-only, verbatim transcript retrieval, or hybrid fusion.",
-                        },
-                        "format": {
-                            "type": "string",
-                            "enum": ["markdown", "json", "both"],
-                            "default": "both",
-                            "description": "Output format to write.",
-                        },
-                        "output_path": {
-                            "type": "string",
-                            "description": "Optional destination file path or directory prefix for the bundle.",
-                        },
-                        "include_edges": {
-                            "type": "boolean",
-                            "default": True,
-                            "description": "Whether relationship edges should be included in the export.",
-                        },
-                        "include_timestamps": {
-                            "type": "boolean",
-                            "default": True,
-                            "description": "Whether created and updated timestamps should be included.",
-                        },
-                        "include_source_prompt": {
-                            "type": "boolean",
-                            "default": False,
-                            "description": "Whether original source prompts should be included when available.",
-                        },
-                        "audience": {
-                            "type": "string",
-                            "enum": ["llm", "human"],
-                            "default": "llm",
-                            "description": "Target audience used to tune bundle rendering.",
-                        },
-                    },
-                ),
-            ),
-            types.Tool(
-                name="import_graph_backup",
-                description=(
-                    "Import a portable JSON graph backup into the current backend. Use for restores or migrations. "
+                    "Load a memory file into the current graph (waggle pull). "
+                    "Accepts a .abhi file (default) or a raw JSON backup. "
+                    "Runs integrity verification, schema validation, and constraint checks before merging. "
                     "Returns counts for created and updated nodes and edges."
                 ),
                 inputSchema=_object_input_schema(
-                    {"input_path": {"type": "string", "description": "Path to the JSON backup file to import."}},
+                    {
+                        "input_path": {"type": "string", "description": "Path to the .abhi or JSON backup file to import."},
+                        "pull_format": {
+                            "type": "string",
+                            "enum": ["abhi", "backup"],
+                            "default": "abhi",
+                            "description": "'abhi' (default) imports a .abhi memory file; 'backup' imports a raw JSON backup.",
+                        },
+                    },
                     required=["input_path"],
                 ),
             ),
             types.Tool(
-                name="import_abhi",
+                name="diff",
                 description=(
-                    "Import an .abhi file with integrity verification, schema validation, and constraint checks before merging it into memory."
-                ),
-                inputSchema=_object_input_schema(
-                    {"input_path": {"type": "string", "description": "Path to the .abhi file to import."}},
-                    required=["input_path"],
-                ),
-            ),
-            types.Tool(
-                name="diff_abhi",
-                description=(
-                    "Compare two .abhi files and report structural graph changes plus lightweight semantic changes."
+                    "Compare two .abhi memory files (waggle diff). "
+                    "Reports structural graph changes — added/removed/updated nodes and edges — "
+                    "plus lightweight semantic changes. The output is the screenshot that goes on the homepage."
                 ),
                 inputSchema=_object_input_schema(
                     {
-                        "input_path_a": {"type": "string", "description": "Path to the first .abhi file."},
-                        "input_path_b": {"type": "string", "description": "Path to the second .abhi file."},
+                        "input_path_a": {"type": "string", "description": "Path to the first .abhi file (base / ours)."},
+                        "input_path_b": {"type": "string", "description": "Path to the second .abhi file (theirs / feature branch)."},
                     },
                     required=["input_path_a", "input_path_b"],
                 ),
             ),
             types.Tool(
-                name="merge_abhi",
+                name="merge",
                 description=(
-                    "Three-way merge branching .abhi files into one output file with explicit conflict reporting."
+                    "Three-way merge branching .abhi memory files (waggle merge). "
+                    "Merges left and right branches against a common base into one output file. "
+                    "Conflicts surface as CONTRADICTS edges — nobody else can do this. "
+                    "Use --merge-strategy to control winner selection when both sides changed the same object."
                 ),
                 inputSchema=_object_input_schema(
                     {
                         "base_input_path": {"type": "string", "description": "Path to the common base .abhi file."},
-                        "left_input_path": {"type": "string", "description": "Path to the left branch .abhi file."},
-                        "right_input_path": {"type": "string", "description": "Path to the right branch .abhi file."},
+                        "left_input_path": {"type": "string", "description": "Path to the left branch .abhi file (ours)."},
+                        "right_input_path": {"type": "string", "description": "Path to the right branch .abhi file (theirs)."},
                         "output_path": {"type": "string", "description": "Destination path for the merged .abhi file."},
                         "merge_strategy": {
                             "type": "string",
@@ -1082,9 +1130,10 @@ class WaggleServer:
                 ),
             ),
             types.Tool(
-                name="query_abhi",
+                name="grep",
                 description=(
-                    "Execute a saved or ad hoc query against an .abhi file and trigger its on_query event actions."
+                    "Execute a saved or ad hoc query against an .abhi file (waggle grep). "
+                    "Triggers the file's on_query event actions and returns matching nodes."
                 ),
                 inputSchema=_object_input_schema(
                     {
@@ -1115,9 +1164,11 @@ class WaggleServer:
                 ),
             ),
             types.Tool(
-                name="validate_abhi",
+                name="fsck",
                 description=(
-                    "Validate an .abhi file without importing it. Verifies integrity hash, schema compliance, and constraint satisfaction."
+                    "Validate an .abhi memory file without importing it (waggle fsck). "
+                    "Verifies integrity hash, schema compliance, and constraint satisfaction. "
+                    "Like git fsck — run this before trusting a file you received."
                 ),
                 inputSchema=_object_input_schema(
                     {"input_path": {"type": "string", "description": "Path to the .abhi file to validate."}},
@@ -1125,9 +1176,11 @@ class WaggleServer:
                 ),
             ),
             types.Tool(
-                name="inspect_abhi",
+                name="show",
                 description=(
-                    "Inspect an .abhi file without loading it into the memory graph. Returns summary stats, type breakdowns, and metadata counts."
+                    "Inspect an .abhi memory file without loading it into the graph (waggle show). "
+                    "Returns summary stats, node/edge type breakdowns, and metadata counts. "
+                    "Like git show — quick read-only inspection of a commit object."
                 ),
                 inputSchema=_object_input_schema(
                     {"input_path": {"type": "string", "description": "Path to the .abhi file to inspect."}},
@@ -1157,6 +1210,20 @@ class WaggleServer:
                 inputSchema=_object_input_schema(
                     {"root_path": {"type": "string", "description": "Source directory of the Markdown vault to import."}},
                     required=["root_path"],
+                ),
+            ),
+            types.Tool(
+                name="edge_quality_report",
+                description=(
+                    "Audit the quality of relationship edges in the memory graph. "
+                    "Returns counts per edge type, average edge_confidence per type, and the top-10 "
+                    "highest- and lowest-confidence edges for each type. "
+                    "Useful for diagnosing graph health and identifying noisy RELATES_TO edges."
+                ),
+                inputSchema=_object_input_schema(
+                    {
+                        **_scope_properties(),
+                    }
                 ),
             ),
         ]
@@ -1324,7 +1391,7 @@ class WaggleServer:
         if em.warmup_status in (STATUS_READY,):  # shouldn't happen in fast mode, but guard it
             return None
         # Best-effort: if the tool supports retrieval_mode, try replay fallback.
-        retrieval_mode = arguments.get("retrieval_mode", "") if name in ("query_graph", "export_context_bundle") else ""
+        retrieval_mode = arguments.get("retrieval_mode", "") if name in ("query_graph", "export_context_bundle", "commit") else ""
         if retrieval_mode in ("verbatim", "lexical"):
             return None  # let it through — no embeddings needed
         return self._tool_result(
@@ -1369,6 +1436,13 @@ class WaggleServer:
         ):
             try:
                 self._validate_tool_payload(name, arguments)
+                # Normalise legacy tool names to their canonical git-vocabulary equivalents.
+                # _TOOL_ALIASES maps old name → (canonical name, default args).
+                # Default args are merged first; caller-provided args win on collision.
+                if name in _TOOL_ALIASES:
+                    canonical_name, default_args = _TOOL_ALIASES[name]
+                    arguments = {**default_args, **arguments}
+                    name = canonical_name
                 LOGGER.info("tool_call_started")
                 if name == "store_node":
                     store_result = graph.add_node(
@@ -1430,7 +1504,67 @@ class WaggleServer:
                         f"Created edge {edge.id} linking {edge.source_id} to {edge.target_id} as {edge.relationship}.",
                         self._edge_payload(edge),
                     )
+                elif name == "canonicalize_node":
+                    _scope = {
+                        "project": arguments.get("project", ""),
+                        "agent_id": arguments.get("agent_id", ""),
+                        "session_id": arguments.get("session_id", ""),
+                    }
+                    result_obj = graph.canonicalize_node(
+                        node_ids=arguments["node_ids"],
+                        canonical_id=arguments["canonical_id"],
+                    )
+                    result = self._tool_result(
+                        f"Merged {len(result_obj.merged_node_ids)} node(s) into canonical node '{result_obj.canonical_node.label}' ({result_obj.canonical_node.id}). "
+                        f"Repointed {result_obj.edges_repointed} edge(s). Added {len(result_obj.aliases_added)} new alias(es).",
+                        {
+                            "canonical_node": self._node_payload(result_obj.canonical_node),
+                            "merged_node_ids": result_obj.merged_node_ids,
+                            "edges_repointed": result_obj.edges_repointed,
+                            "aliases_added": result_obj.aliases_added,
+                        },
+                    )
+                elif name == "dedup_candidates":
+                    _scope = {
+                        "project": arguments.get("project", ""),
+                        "agent_id": arguments.get("agent_id", ""),
+                        "session_id": arguments.get("session_id", ""),
+                    }
+                    threshold = float(arguments.get("threshold", 0.85))
+                    result_obj = graph.dedup_candidates(
+                        scope=_scope,
+                        threshold=threshold,
+                    )
+                    lines = [
+                        f"Found {len(result_obj.pairs)} candidate pair(s) above threshold {threshold} (auto-merge threshold is higher).",
+                        "Top candidates (sorted by similarity):",
+                    ]
+                    for pair in result_obj.pairs[:10]:
+                        lines.append(
+                            f"  {pair.similarity:.4f}: {pair.node_id_a} ({pair.label_a}) ↔ {pair.node_id_b} ({pair.label_b})"
+                        )
+                    if len(result_obj.pairs) > 10:
+                        lines.append(f"  ... and {len(result_obj.pairs) - 10} more")
+                    result = self._tool_result(
+                        "\n".join(lines),
+                        {
+                            "pairs": [
+                                {
+                                    "node_id_a": p.node_id_a,
+                                    "node_id_b": p.node_id_b,
+                                    "label_a": p.label_a,
+                                    "label_b": p.label_b,
+                                    "similarity": p.similarity,
+                                }
+                                for p in result_obj.pairs
+                            ],
+                            "threshold": result_obj.threshold,
+                            "total_nodes_scanned": result_obj.total_nodes_scanned,
+                        },
+                    )
                 elif name == "aggregate_graph":
+                    _as_of_raw = arguments.get("as_of")
+                    _as_of = datetime.fromisoformat(_as_of_raw).astimezone(timezone.utc) if _as_of_raw else None
                     subgraph = graph.aggregate(
                         query=arguments.get("query", ""),
                         node_types=arguments.get("node_types"),
@@ -1440,12 +1574,16 @@ class WaggleServer:
                         agent_id=arguments.get("agent_id", ""),
                         project=arguments.get("project", ""),
                         session_id=arguments.get("session_id", ""),
+                        include_invalidated=bool(arguments.get("include_invalidated", False)),
+                        as_of=_as_of,
                     )
                     result = self._tool_result(
                         serialize_subgraph(subgraph),
                         self._subgraph_payload(subgraph),
                     )
                 elif name == "query_graph":
+                    _as_of_raw = arguments.get("as_of")
+                    _as_of = datetime.fromisoformat(_as_of_raw).astimezone(timezone.utc) if _as_of_raw else None
                     subgraph = graph.query(
                         query=arguments["query"],
                         max_nodes=int(arguments.get("max_nodes", 20)),
@@ -1455,6 +1593,8 @@ class WaggleServer:
                         project=arguments.get("project", ""),
                         session_id=arguments.get("session_id", ""),
                         retrieval_mode=arguments.get("retrieval_mode", "hybrid"),
+                        include_invalidated=bool(arguments.get("include_invalidated", False)),
+                        as_of=_as_of,
                     )
                     result = self._tool_result(
                         serialize_subgraph(subgraph),
@@ -1537,6 +1677,7 @@ class WaggleServer:
                     resolved = graph.resolve_conflict(
                         edge_id=arguments["edge_id"],
                         resolution_note=arguments.get("resolution_note", ""),
+                        winner=arguments.get("winner"),
                     )
                     result = self._tool_result(serialize_conflict_entry(resolved), self._conflict_entry_payload(resolved))
                 elif name == "update_node":
@@ -1633,96 +1774,118 @@ class WaggleServer:
                             "total_context_window_edges": edge_count,
                         },
                     )
-                elif name == "export_graph_backup":
-                    backup = graph.export_graph_backup(output_path=arguments.get("output_path"))
-                    result = self._tool_result(
-                        f"Exported graph backup to {backup.output_path}.",
-                        {
-                            "output_path": backup.output_path,
-                            "tenant_id": backup.tenant_id,
-                            "schema_version": backup.schema_version,
-                            "node_count": backup.node_count,
-                            "edge_count": backup.edge_count,
-                        },
-                    )
-                elif name == "export_abhi":
-                    _assert_export_safe(
-                        graph,
-                        force=bool(arguments.get("force", False)),
-                        project=arguments.get("project", ""),
-                        agent_id=arguments.get("agent_id", ""),
-                        session_id=arguments.get("session_id", ""),
-                    )
-                    exported = graph.export_abhi(
-                        output_path=arguments.get("output_path"),
-                        project=arguments.get("project", ""),
-                        agent_id=arguments.get("agent_id", ""),
-                        session_id=arguments.get("session_id", ""),
-                    )
-                    result = self._tool_result(
-                        f"Exported ABHI memory file to {exported.output_path}.",
-                        {
-                            "output_path": exported.output_path,
-                            "tenant_id": exported.tenant_id,
-                            "schema_version": exported.schema_version,
-                            "abhi_spec_version": exported.abhi_spec_version,
-                            "node_count": exported.node_count,
-                            "edge_count": exported.edge_count,
-                            "content_hash": exported.content_hash,
-                        },
-                    )
-                elif name == "export_context_bundle":
-                    exported = graph.export_context_bundle(
-                        mode=arguments.get("mode", "prime"),
-                        query=arguments.get("query", ""),
-                        project=arguments.get("project", ""),
-                        agent_id=arguments.get("agent_id", ""),
-                        session_id=arguments.get("session_id", ""),
-                        max_nodes=int(arguments.get("max_nodes", 25)),
-                        max_depth=int(arguments.get("max_depth", 2)),
-                        retrieval_mode=arguments.get("retrieval_mode", "hybrid"),
-                        format=arguments.get("format", "both"),
-                        output_path=arguments.get("output_path"),
-                        include_edges=bool(arguments.get("include_edges", True)),
-                        include_timestamps=bool(arguments.get("include_timestamps", True)),
-                        include_source_prompt=bool(arguments.get("include_source_prompt", False)),
-                        audience=arguments.get("audience", "llm"),
-                    )
-                    result = self._tool_result(
-                        serialize_context_bundle_export(exported),
-                        self._context_bundle_payload(exported),
-                    )
-                elif name == "import_graph_backup":
-                    imported = graph.import_graph_backup(input_path=arguments["input_path"])
-                    result = self._tool_result(
-                        f"Imported graph backup from {imported.input_path}.",
-                        {
-                            "input_path": imported.input_path,
-                            "tenant_id": imported.tenant_id,
-                            "schema_version": imported.schema_version,
-                            "nodes_created": imported.nodes_created,
-                            "nodes_updated": imported.nodes_updated,
-                            "edges_created": imported.edges_created,
-                            "edges_updated": imported.edges_updated,
-                        },
-                    )
-                elif name == "import_abhi":
-                    imported = graph.import_abhi(input_path=arguments["input_path"])
-                    result = self._tool_result(
-                        f"Imported ABHI memory file from {imported.input_path}.",
-                        {
-                            "input_path": imported.input_path,
-                            "tenant_id": imported.tenant_id,
-                            "schema_version": imported.schema_version,
-                            "abhi_spec_version": imported.abhi_spec_version,
-                            "nodes_created": imported.nodes_created,
-                            "nodes_updated": imported.nodes_updated,
-                            "edges_created": imported.edges_created,
-                            "edges_updated": imported.edges_updated,
-                            "hash_verified": imported.hash_verified,
-                        },
-                    )
-                elif name == "diff_abhi":
+                elif name == "commit":
+                    # waggle commit — unified export: abhi (default), backup, or bundle
+                    commit_format = arguments.get("commit_format", "abhi")
+                    if commit_format == "backup":
+                        backup = graph.export_graph_backup(output_path=arguments.get("output_path"))
+                        result = self._tool_result(
+                            f"Committed graph backup to {backup.output_path}.",
+                            {
+                                "output_path": backup.output_path,
+                                "tenant_id": backup.tenant_id,
+                                "schema_version": backup.schema_version,
+                                "node_count": backup.node_count,
+                                "edge_count": backup.edge_count,
+                                "commit_format": "backup",
+                            },
+                        )
+                    elif commit_format == "bundle":
+                        exported = graph.export_context_bundle(
+                            mode=arguments.get("mode", "prime"),
+                            query=arguments.get("query", ""),
+                            project=arguments.get("project", ""),
+                            agent_id=arguments.get("agent_id", ""),
+                            session_id=arguments.get("session_id", ""),
+                            max_nodes=int(arguments.get("max_nodes", 25)),
+                            max_depth=int(arguments.get("max_depth", 2)),
+                            retrieval_mode=arguments.get("retrieval_mode", "hybrid"),
+                            format=arguments.get("format", "both"),
+                            output_path=arguments.get("output_path"),
+                            include_edges=bool(arguments.get("include_edges", True)),
+                            include_timestamps=bool(arguments.get("include_timestamps", True)),
+                            include_source_prompt=bool(arguments.get("include_source_prompt", False)),
+                            audience=arguments.get("audience", "llm"),
+                        )
+                        result = self._tool_result(
+                            serialize_context_bundle_export(exported),
+                            self._context_bundle_payload(exported),
+                        )
+                    else:
+                        # default: abhi
+                        _assert_export_safe(
+                            graph,
+                            force=bool(arguments.get("force", False)),
+                            project=arguments.get("project", ""),
+                            agent_id=arguments.get("agent_id", ""),
+                            session_id=arguments.get("session_id", ""),
+                        )
+                        exported = graph.export_abhi(
+                            output_path=arguments.get("output_path"),
+                            project=arguments.get("project", ""),
+                            agent_id=arguments.get("agent_id", ""),
+                            session_id=arguments.get("session_id", ""),
+                            include_low_confidence_edges=bool(arguments.get("include_low_confidence_edges", False)),
+                        )
+                        edge_filter = exported.export_context.get("edge_filter", {})
+                        filter_summary = ""
+                        if edge_filter:
+                            filtered_count = edge_filter.get("edges_filtered", 0)
+                            total_count = edge_filter.get("edges_total", 0)
+                            if filtered_count:
+                                filter_summary = f" ({filtered_count} low-confidence RELATES_TO edges filtered from {total_count} total)"
+                        result = self._tool_result(
+                            f"Committed memory to {exported.output_path}.{filter_summary}",
+                            {
+                                "output_path": exported.output_path,
+                                "tenant_id": exported.tenant_id,
+                                "schema_version": exported.schema_version,
+                                "abhi_spec_version": exported.abhi_spec_version,
+                                "node_count": exported.node_count,
+                                "edge_count": exported.edge_count,
+                                "content_hash": exported.content_hash,
+                                "edge_filter_summary": edge_filter,
+                                "commit_format": "abhi",
+                            },
+                        )
+                elif name == "pull":
+                    # waggle pull — unified import: abhi (default) or backup
+                    pull_format = arguments.get("pull_format", "abhi")
+                    if pull_format == "backup":
+                        imported = graph.import_graph_backup(input_path=arguments["input_path"])
+                        result = self._tool_result(
+                            f"Pulled graph backup from {imported.input_path}.",
+                            {
+                                "input_path": imported.input_path,
+                                "tenant_id": imported.tenant_id,
+                                "schema_version": imported.schema_version,
+                                "nodes_created": imported.nodes_created,
+                                "nodes_updated": imported.nodes_updated,
+                                "edges_created": imported.edges_created,
+                                "edges_updated": imported.edges_updated,
+                                "pull_format": "backup",
+                            },
+                        )
+                    else:
+                        # default: abhi
+                        imported = graph.import_abhi(input_path=arguments["input_path"])
+                        result = self._tool_result(
+                            f"Pulled memory from {imported.input_path}.",
+                            {
+                                "input_path": imported.input_path,
+                                "tenant_id": imported.tenant_id,
+                                "schema_version": imported.schema_version,
+                                "abhi_spec_version": imported.abhi_spec_version,
+                                "nodes_created": imported.nodes_created,
+                                "nodes_updated": imported.nodes_updated,
+                                "edges_created": imported.edges_created,
+                                "edges_updated": imported.edges_updated,
+                                "hash_verified": imported.hash_verified,
+                                "pull_format": "abhi",
+                            },
+                        )
+                elif name == "diff":
+                    # waggle diff
                     diff = graph.diff_abhi(
                         input_path_a=arguments["input_path_a"],
                         input_path_b=arguments["input_path_b"],
@@ -1731,7 +1894,8 @@ class WaggleServer:
                         serialize_abhi_diff(diff),
                         diff.model_dump(mode="json"),
                     )
-                elif name == "merge_abhi":
+                elif name == "merge":
+                    # waggle merge
                     merged = graph.merge_abhi(
                         base_input_path=arguments["base_input_path"],
                         left_input_path=arguments["left_input_path"],
@@ -1743,7 +1907,8 @@ class WaggleServer:
                         serialize_abhi_merge(merged),
                         merged.model_dump(mode="json"),
                     )
-                elif name == "query_abhi":
+                elif name == "grep":
+                    # waggle grep
                     queried = graph.query_abhi(
                         input_path=arguments["input_path"],
                         query_id=arguments.get("query_id", ""),
@@ -1764,13 +1929,15 @@ class WaggleServer:
                         serialize_abhi_chunk_load(loaded),
                         loaded.model_dump(mode="json"),
                     )
-                elif name == "validate_abhi":
+                elif name == "fsck":
+                    # waggle fsck
                     validation = graph.validate_abhi(input_path=arguments["input_path"])
                     result = self._tool_result(
                         serialize_abhi_validation(validation),
                         validation.model_dump(mode="json"),
                     )
-                elif name == "inspect_abhi":
+                elif name == "show":
+                    # waggle show
                     inspection = graph.inspect_abhi(input_path=arguments["input_path"])
                     result = self._tool_result(
                         serialize_abhi_inspect(inspection),
@@ -1793,6 +1960,18 @@ class WaggleServer:
                         f"Imported Markdown vault from {imported.root_path}.",
                         self._markdown_vault_import_payload(imported),
                     )
+                elif name == "edge_quality_report":
+                    report = graph.edge_quality_report(
+                        agent_id=arguments.get("agent_id", ""),
+                        project=arguments.get("project", ""),
+                        session_id=arguments.get("session_id", ""),
+                    )
+                    lines = [f"Edge quality report: {report['total_edges']} edges across {report['total_edge_types']} type(s)."]
+                    for rel, stats in sorted(report.get("by_type", {}).items()):
+                        lines.append(
+                            f"  {rel}: count={stats['count']} avg_confidence={stats['avg_confidence']:.3f}"
+                        )
+                    result = self._tool_result("\n".join(lines), report)
                 else:
                     raise ValidationFailure(f"Unknown tool: {name}")
 
@@ -1940,6 +2119,11 @@ class WaggleServer:
 
     def _observation_payload(self, result: ObservationResult) -> dict[str, Any]:
         return {
+            "turn_id": result.turn_id,
+            "verbatim_stored": result.verbatim_stored,
+            "nodes_extracted": result.nodes_extracted,
+            "edges_inferred": result.edges_inferred,
+            "extraction_errors": result.extraction_errors,
             "stored_nodes": [self._node_payload(node) for node in result.stored_nodes],
             "created_count": result.created_count,
             "reused_count": result.reused_count,
@@ -2176,12 +2360,12 @@ class WaggleServer:
             self._assert_payload_size(arguments.get("project", ""), limit, "debug_retrieval.project")
             self._assert_payload_size(arguments.get("session_id", ""), limit, "debug_retrieval.session_id")
             return
-        if name == "export_context_bundle":
-            self._assert_payload_size(arguments.get("query", ""), limit, "export_context_bundle.query")
-            self._assert_payload_size(arguments.get("project", ""), limit, "export_context_bundle.project")
-            self._assert_payload_size(arguments.get("agent_id", ""), limit, "export_context_bundle.agent_id")
-            self._assert_payload_size(arguments.get("session_id", ""), limit, "export_context_bundle.session_id")
-            self._assert_payload_size(arguments.get("output_path", ""), limit, "export_context_bundle.output_path")
+        if name in ("export_context_bundle", "commit"):
+            self._assert_payload_size(arguments.get("query", ""), limit, "commit.query")
+            self._assert_payload_size(arguments.get("project", ""), limit, "commit.project")
+            self._assert_payload_size(arguments.get("agent_id", ""), limit, "commit.agent_id")
+            self._assert_payload_size(arguments.get("session_id", ""), limit, "commit.session_id")
+            self._assert_payload_size(arguments.get("output_path", ""), limit, "commit.output_path")
             return
         if name == "window_graph_viz":
             self._assert_payload_size(arguments.get("project", ""), limit, "window_graph_viz.project")
@@ -2194,6 +2378,7 @@ class WaggleServer:
         if name == "resolve_conflict":
             self._assert_payload_size(arguments.get("edge_id", ""), limit, "resolve_conflict.edge_id")
             self._assert_payload_size(arguments.get("resolution_note", ""), limit, "resolve_conflict.resolution_note")
+            self._assert_payload_size(arguments.get("winner", ""), limit, "resolve_conflict.winner")
 
     @staticmethod
     def _assert_payload_size(value: Any, limit: int, field_name: str) -> None:
@@ -3078,12 +3263,17 @@ Core graph workflow
    - list_conflicts       : list contradiction/update edges
    - resolve_conflict     : mark a conflict as resolved without deleting history
 
-4. Export / handoff
-   - export_context_bundle : create markdown/json context packages for another model
+4. Export / handoff  (git-vocabulary)
+   - commit                : snapshot memory to a portable .abhi file (waggle commit)
+   - pull                  : load a .abhi file into the graph (waggle pull)
+   - push                  : upload to Google Drive (waggle push)
+   - diff                  : compare two .abhi files (waggle diff)
+   - merge                 : three-way merge .abhi files (waggle merge)
+   - fsck                  : validate an .abhi file (waggle fsck)
+   - show                  : inspect an .abhi file without importing (waggle show)
+   - grep                  : query an .abhi file (waggle grep)
    - export_markdown_vault : export one-file-per-node markdown for manual editing
    - import_markdown_vault : re-import edited markdown vault files
-   - export_graph_backup   : portable json backup
-   - import_graph_backup   : restore backup into the active backend
    - export_graph_html     : interactive graph visualization
 
 5. Inspect the graph
@@ -3105,7 +3295,7 @@ Important behavior
   - get_related
   - get_node_history
   - prime_context
-  - export_context_bundle
+  - commit (waggle commit — snapshot memory to .abhi)
 
 Common workflows
 ----------------
@@ -3188,7 +3378,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     export_abhi = subparsers.add_parser(
         "export",
-        help="Export the current memory graph in a portable format.",
+        help="Export the current memory graph in a portable format. (alias: commit)",
     )
     export_abhi.add_argument("--output", dest="output_path", default=None)
     export_abhi.add_argument("--project", default="")
@@ -3204,9 +3394,32 @@ def _build_parser() -> argparse.ArgumentParser:
     export_abhi.add_argument("--passphrase-env", default="")
     export_abhi.add_argument("--force", action="store_true", help="Export even if transcript secret scan finds likely credentials or tokens.")
 
+    # git-vocabulary alias: waggle commit == waggle export
+    commit_abhi = subparsers.add_parser(
+        "commit",
+        help="Snapshot the current memory graph to a portable .abhi file. (waggle commit)",
+        description=(
+            "Save the current memory graph as a portable .abhi file — like git commit for your AI context. "
+            "The output file can be shared, diffed, merged, and pulled into any Waggle-enabled client."
+        ),
+    )
+    commit_abhi.add_argument("--output", dest="output_path", default=None)
+    commit_abhi.add_argument("--project", default="")
+    commit_abhi.add_argument("--agent-id", default="")
+    commit_abhi.add_argument("--session-id", default="")
+    commit_abhi.add_argument("--scope", choices=["all", "project", "session", "since-date"], default="all")
+    commit_abhi.add_argument("--since-date", default="")
+    commit_abhi.add_argument("--include-embeddings", action=argparse.BooleanOptionalAction, default=True)
+    commit_abhi.add_argument("--encrypt", action="store_true")
+    commit_abhi.add_argument("--sign", action="store_true")
+    commit_abhi.add_argument("--signing-key-dir", default="~/.waggle/keys")
+    commit_abhi.add_argument("--redact", dest="redact_patterns", action="append", default=[])
+    commit_abhi.add_argument("--passphrase-env", default="")
+    commit_abhi.add_argument("--force", action="store_true", help="Commit even if transcript secret scan finds likely credentials or tokens.")
+
     import_abhi = subparsers.add_parser(
         "import",
-        help="Import a portable memory file into the active backend.",
+        help="Import a portable memory file into the active backend. (alias: pull <local-file>)",
     )
     import_abhi.add_argument("input_path", nargs="?")
     import_abhi.add_argument("--input", dest="input_path_flag", default="")
@@ -3219,17 +3432,41 @@ def _build_parser() -> argparse.ArgumentParser:
 
     validate_abhi = subparsers.add_parser(
         "validate",
-        help="Validate a portable .abhi memory file.",
+        help="Validate a portable .abhi memory file. (alias: fsck)",
     )
     validate_abhi.add_argument("--input", dest="input_path", required=True)
     validate_abhi.add_argument("--passphrase-env", default="")
 
+    # git-vocabulary alias: waggle fsck == waggle validate
+    fsck_abhi = subparsers.add_parser(
+        "fsck",
+        help="Verify integrity of an .abhi memory file. (waggle fsck)",
+        description=(
+            "Verify the integrity hash, schema compliance, and constraint satisfaction of an .abhi file "
+            "without importing it — like git fsck for your memory graph."
+        ),
+    )
+    fsck_abhi.add_argument("--input", dest="input_path", required=True)
+    fsck_abhi.add_argument("--passphrase-env", default="")
+
     inspect_abhi = subparsers.add_parser(
         "inspect",
-        help="Inspect an .abhi memory file without importing it.",
+        help="Inspect an .abhi memory file without importing it. (alias: show)",
     )
     inspect_abhi.add_argument("--input", dest="input_path", required=True)
     inspect_abhi.add_argument("--passphrase-env", default="")
+
+    # git-vocabulary alias: waggle show == waggle inspect
+    show_abhi = subparsers.add_parser(
+        "show",
+        help="Inspect an .abhi memory file without importing it. (waggle show)",
+        description=(
+            "Show summary stats, node/edge type breakdowns, and metadata counts for an .abhi file "
+            "without loading it into the graph — like git show for a commit object."
+        ),
+    )
+    show_abhi.add_argument("--input", dest="input_path", required=True)
+    show_abhi.add_argument("--passphrase-env", default="")
 
     diff_abhi = subparsers.add_parser(
         "diff",
@@ -3254,12 +3491,26 @@ def _build_parser() -> argparse.ArgumentParser:
 
     query_abhi = subparsers.add_parser(
         "query",
-        help="Execute a query against an .abhi memory file.",
+        help="Execute a query against an .abhi memory file. (alias: grep)",
     )
     query_abhi.add_argument("--input", dest="input_path", required=True)
     query_abhi.add_argument("--query-id", default="")
     query_abhi.add_argument("--query-text", default="")
     query_abhi.add_argument("--passphrase-env", default="")
+
+    # git-vocabulary alias: waggle grep == waggle query
+    grep_abhi = subparsers.add_parser(
+        "grep",
+        help="Search an .abhi memory file with a query. (waggle grep)",
+        description=(
+            "Execute a saved or ad hoc query against an .abhi file and return matching nodes — "
+            "like git grep but for your memory graph."
+        ),
+    )
+    grep_abhi.add_argument("--input", dest="input_path", required=True)
+    grep_abhi.add_argument("--query-id", default="")
+    grep_abhi.add_argument("--query-text", default="")
+    grep_abhi.add_argument("--passphrase-env", default="")
 
     load_abhi_chunks = subparsers.add_parser(
         "load-chunks",
@@ -3471,6 +3722,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     setup.add_argument("--dry-run", action="store_true", help="Show what would change without writing files.")
     setup.add_argument("--run-doctor", action=argparse.BooleanOptionalAction, default=True)
+    setup.add_argument("--no-hooks", action="store_true", help="Skip Claude Code hook installation.")
 
     subparsers.add_parser("init", help="Interactive setup wizard — configure an MCP client to use waggle-mcp.")
     subparsers.add_parser(
@@ -3488,10 +3740,41 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     doctor.add_argument("--fix", action="store_true", help="Re-embed stale transcript/node rows to the current model ID.")
+
+    demo_cmd = subparsers.add_parser(
+        "demo",
+        help="Run a 60-second local demo with a pre-loaded example graph. No MCP client required.",
+        description=(
+            "Import the bundled example graph (examples/demo.abhi) into a temporary SQLite DB, "
+            "run 4 scripted queries, and print results. Uses WAGGLE_MODEL=deterministic by default "
+            "for instant startup. Pass --with-embeddings to use the real sentence-transformers model."
+        ),
+    )
+    demo_cmd.add_argument(
+        "--with-embeddings",
+        action="store_true",
+        help="Use the real sentence-transformers model instead of deterministic mode.",
+    )
+
+    uninstall_hooks_cmd = subparsers.add_parser(
+        "uninstall-hooks",
+        help="Remove the Waggle managed hooks block from Claude Code settings.",
+        description="Idempotent: removes the waggle-managed block from ~/.claude/settings.json if present.",
+    )
+
     return parser
 
 
 def _run_admin_command(config: AppConfig, args: argparse.Namespace) -> int:
+    # Normalise git-vocabulary CLI aliases to their canonical command names.
+    _CLI_COMMAND_ALIASES: dict[str, str] = {
+        "commit": "export",
+        "fsck": "validate",
+        "show": "inspect",
+        "grep": "query",
+    }
+    if args.command in _CLI_COMMAND_ALIASES:
+        args.command = _CLI_COMMAND_ALIASES[args.command]
     backend = _build_backend(config)
     if args.command == "create-tenant":
         tenant = backend.ensure_tenant(args.tenant_id, args.name)
@@ -4491,6 +4774,297 @@ def _setup_clients_from_args(raw_clients: str) -> list[str]:
     return _normalize_setup_clients(raw_clients)
 
 
+# ── Claude Code hook constants ────────────────────────────────────────────────
+_CLAUDE_HOOKS_BLOCK_HEADER = "# >>> waggle-managed >>>"
+_CLAUDE_HOOKS_BLOCK_FOOTER = "# <<< waggle-managed <<<"
+
+
+def _hooks_block(hook_dir: Path) -> str:
+    """Build the managed hooks JSON block for Claude Code settings."""
+    pre_response = str(hook_dir / "pre_response.py")
+    post_response = str(hook_dir / "post_response.py")
+    pre_compact = str(hook_dir / "pre_compact.py")
+    return (
+        f"{_CLAUDE_HOOKS_BLOCK_HEADER}\n"
+        "# Waggle automatic memory hooks — do not edit this block manually.\n"
+        "# Run 'waggle-mcp setup --yes' to update or 'waggle-mcp uninstall-hooks' to remove.\n"
+        f"{_CLAUDE_HOOKS_BLOCK_FOOTER}"
+    )
+
+
+def _hooks_json_block(hook_dir: Path) -> dict[str, Any]:
+    """Return the hooks dict to merge into Claude Code settings."""
+    pre_response = str(hook_dir / "pre_response.py")
+    post_response = str(hook_dir / "post_response.py")
+    pre_compact = str(hook_dir / "pre_compact.py")
+    python_exe = _python_exe()
+    return {
+        "hooks": {
+            "UserPromptSubmit": [
+                {
+                    "matcher": "",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"{python_exe} {pre_response}",
+                        }
+                    ],
+                }
+            ],
+            "Stop": [
+                {
+                    "matcher": "",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"{python_exe} {post_response}",
+                        }
+                    ],
+                }
+            ],
+            "PreCompact": [
+                {
+                    "matcher": "",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"{python_exe} {pre_compact}",
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+
+
+def _find_claude_settings() -> Path | None:
+    """Return the Claude Code settings.json path if it exists."""
+    candidates = [
+        Path.home() / ".claude" / "settings.json",
+        Path.home() / ".config" / "claude" / "settings.json",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    # Return the primary path even if it doesn't exist (for creation)
+    return Path.home() / ".claude" / "settings.json"
+
+
+def _install_claude_hooks(hook_dir: Path, *, dry_run: bool = False) -> Path | None:
+    """Write the waggle-managed hooks block into Claude Code settings.json.
+
+    Returns the settings path if written, None if Claude Code not detected.
+    """
+    settings_path = _find_claude_settings()
+    if settings_path is None:
+        return None
+
+    hook_data = _hooks_json_block(hook_dir)
+
+    if dry_run:
+        return settings_path
+
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    existing_text = settings_path.read_text() if settings_path.exists() else "{}"
+    try:
+        existing = json.loads(existing_text)
+    except json.JSONDecodeError:
+        existing = {}
+
+    # Merge hooks block (idempotent — overwrite waggle keys)
+    existing_hooks = existing.get("hooks", {})
+    for event, entries in hook_data["hooks"].items():
+        # Remove any existing waggle entries for this event
+        existing_entries = [
+            e for e in existing_hooks.get(event, [])
+            if not any(
+                "waggle" in str(h.get("command", ""))
+                for h in e.get("hooks", [])
+            )
+        ]
+        existing_entries.extend(entries)
+        existing_hooks[event] = existing_entries
+    existing["hooks"] = existing_hooks
+
+    settings_path.write_text(json.dumps(existing, indent=2))
+    return settings_path
+
+
+def _uninstall_claude_hooks() -> Path | None:
+    """Remove waggle hook entries from Claude Code settings.json.
+
+    Returns the settings path if modified, None if nothing to do.
+    """
+    settings_path = _find_claude_settings()
+    if settings_path is None or not settings_path.exists():
+        return None
+
+    try:
+        existing = json.loads(settings_path.read_text())
+    except json.JSONDecodeError:
+        return None
+
+    hooks = existing.get("hooks", {})
+    changed = False
+    for event in list(hooks.keys()):
+        filtered = [
+            e for e in hooks[event]
+            if not any(
+                "waggle" in str(h.get("command", ""))
+                for h in e.get("hooks", [])
+            )
+        ]
+        if len(filtered) != len(hooks[event]):
+            changed = True
+        if filtered:
+            hooks[event] = filtered
+        else:
+            del hooks[event]
+
+    if not changed:
+        return None
+
+    existing["hooks"] = hooks
+    settings_path.write_text(json.dumps(existing, indent=2))
+    return settings_path
+
+
+def _run_uninstall_hooks() -> int:
+    """Remove the waggle-managed hooks block from Claude Code settings."""
+    result = _uninstall_claude_hooks()
+    if result is None:
+        print("No Waggle hooks found in Claude Code settings (nothing to remove).")
+    else:
+        _ok(f"Waggle hooks removed from {result}")
+    return 0
+
+
+def _run_demo(args: argparse.Namespace) -> int:
+    """Run the 60-second local demo with the bundled example graph."""
+    import shutil as _shutil
+
+    with_embeddings = bool(getattr(args, "with_embeddings", False))
+    model_name = "all-MiniLM-L6-v2" if with_embeddings else "deterministic"
+
+    # Locate the bundled demo.abhi
+    demo_abhi = Path(__file__).resolve().parent.parent.parent / "examples" / "demo.abhi"
+    if not demo_abhi.exists():
+        # Try relative to the installed package location
+        demo_abhi = Path(__file__).resolve().parent / "examples" / "demo.abhi"
+    if not demo_abhi.exists():
+        # Try from cwd
+        demo_abhi = Path.cwd() / "examples" / "demo.abhi"
+    if not demo_abhi.exists():
+        _fail(
+            "Could not find examples/demo.abhi. "
+            "Run 'python3 examples/generate_demo_abhi.py' from the repo root to regenerate it."
+        )
+        return 1
+
+    # Create a temp directory (NOT in the user's home)
+    tmp_dir = Path(tempfile.mkdtemp(prefix="waggle-demo-"))
+    demo_db = tmp_dir / "demo.db"
+
+    print()
+    print(_c(_BOLD, "waggle-mcp demo"))
+    print(_c(_CYAN, "─" * 50))
+    print(f"  graph:   {demo_abhi}")
+    print(f"  db:      {demo_db}")
+    print(f"  model:   {model_name}")
+    print()
+
+    try:
+        # Import the demo graph
+        embedding_model = EmbeddingModel(model_name)
+        graph = MemoryGraph(
+            str(demo_db),
+            embedding_model,
+            tenant_id="local-default",
+            enable_dedup=False,
+        )
+        imported = graph.import_abhi(input_path=demo_abhi, merge_strategy="skip-existing")
+        print(f"  Imported {imported.nodes_created} nodes, {imported.edges_created} edges from demo.abhi")
+        print()
+
+        # ── Query 1: What database did we choose? ─────────────────────────────
+        print(_c(_BOLD, "Query 1: What database did we choose?"))
+        result1 = graph.query(query="What database did we choose?", max_nodes=6, max_depth=2)
+        if result1.nodes:
+            for node in result1.nodes[:4]:
+                marker = "  [decision]" if node.node_type.value == "decision" else "  [note]    "
+                print(f"{marker} {node.label}")
+        else:
+            print("  (no results)")
+        print()
+
+        # ── Query 2: What changed about the database decision? ────────────────
+        print(_c(_BOLD, "Query 2: What changed about the database decision?"))
+        result2 = graph.query(query="What changed about the database decision? contradiction superseded", max_nodes=8, max_depth=2)
+        # Show contradiction/update edges
+        contradiction_edges = [e for e in result2.edges if e.relationship in ("contradicts", "updates")]
+        if contradiction_edges:
+            for edge in contradiction_edges[:3]:
+                src = next((n for n in result2.nodes if n.id == edge.source_id), None)
+                tgt = next((n for n in result2.nodes if n.id == edge.target_id), None)
+                if src and tgt:
+                    print(f"  [{edge.relationship}] {src.label}")
+                    print(f"    → {tgt.label}")
+        elif result2.nodes:
+            for node in result2.nodes[:3]:
+                print(f"  {node.label}")
+        else:
+            print("  (no results)")
+        print()
+
+        # ── Query 3: What are our team's preferences? ─────────────────────────
+        print(_c(_BOLD, "Query 3: What are our team's preferences?"))
+        result3 = graph.query(query="team preferences", max_nodes=8, max_depth=1)
+        pref_nodes = [n for n in result3.nodes if n.node_type.value == "preference"]
+        if pref_nodes:
+            for node in pref_nodes[:3]:
+                print(f"  [preference] {node.label}")
+        elif result3.nodes:
+            for node in result3.nodes[:3]:
+                print(f"  {node.label}")
+        else:
+            print("  (no results)")
+        print()
+
+        # ── Query 4: Show decisions and their reasons ─────────────────────────
+        print(_c(_BOLD, "Query 4: Show decisions and their reasons"))
+        result4 = graph.query(query="decisions reasons why", max_nodes=10, max_depth=2)
+        decision_nodes = [n for n in result4.nodes if n.node_type.value == "decision"]
+        reason_edges = [e for e in result4.edges if e.relationship == "derived_from"]
+        if decision_nodes:
+            for dec in decision_nodes[:3]:
+                print(f"  [decision] {dec.label}")
+                # Find reason nodes connected via derived_from
+                reason_ids = {e.target_id for e in reason_edges if e.source_id == dec.id}
+                for node in result4.nodes:
+                    if node.id in reason_ids:
+                        print(f"    ↳ [reason] {node.label}")
+        else:
+            print("  (no results)")
+        print()
+
+        # ── Graph Studio URL ──────────────────────────────────────────────────
+        studio_url = f"http://127.0.0.1:8686/graph?mode=view"
+        print(_c(_CYAN, "─" * 50))
+        print(f"  Graph Studio: {studio_url}")
+        print(f"  (run 'WAGGLE_DB_PATH={demo_db} waggle-mcp ui' to open it)")
+        print()
+        print(f"  Cleanup: rm -rf {tmp_dir}")
+        print()
+
+    except Exception as exc:
+        _fail(f"Demo failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+    return 0
+
+
 def _run_setup(args: argparse.Namespace) -> int:
     """Non-interactive setup command for one-line installs."""
     if not args.yes and not args.dry_run:
@@ -4547,6 +5121,19 @@ def _run_setup(args: argparse.Namespace) -> int:
     for client in clients:
         print(f"  {_c(_CYAN, chr(0x27A1))}  {_RESTART_HINTS[client]}")
     print()
+
+    # Install Claude Code hooks if not suppressed
+    no_hooks = bool(getattr(args, "no_hooks", False))
+    if not no_hooks and not args.dry_run:
+        hook_dir = Path(__file__).resolve().parent / "hooks" / "claude_code"
+        if hook_dir.exists():
+            try:
+                hooks_path = _install_claude_hooks(hook_dir)
+                if hooks_path is not None:
+                    _ok(f"Claude Code hooks installed in {hooks_path}")
+            except OSError as exc:
+                # Non-fatal: hooks are optional
+                LOGGER.warning("claude_hooks_install_failed", extra={"error": str(exc)})
 
     if args.run_doctor:
         doctor_config = AppConfig.from_env()
@@ -4658,6 +5245,14 @@ def main() -> None:
         except ValidationFailure as exc:
             _emit_cli_error("validation_error", str(exc), {})
             sys.exit(1)
+    if command == "demo":
+        try:
+            sys.exit(_run_demo(args))
+        except Exception as exc:
+            _emit_cli_error("internal_error", str(exc), {"type": type(exc).__name__})
+            sys.exit(1)
+    if command == "uninstall-hooks":
+        sys.exit(_run_uninstall_hooks())
     if command == "init":
         sys.exit(_run_init())
     if command == "features":
