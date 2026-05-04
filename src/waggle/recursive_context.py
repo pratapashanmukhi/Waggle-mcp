@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import re
 import time
 from dataclasses import dataclass, field
@@ -91,6 +92,30 @@ class RecursiveContextResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Ablation configuration
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AblationConfig:
+    """
+    Controls which RMCA steps are active for ablation studies.
+
+    All flags default to True (full RMCA behaviour).  Set a flag to False
+    to disable the corresponding step.  ``random_subqueries`` takes
+    precedence over ``decompose`` when both are set.
+    """
+
+    decompose: bool = True
+    graph_expand: bool = True
+    conflict_resolve: bool = True
+    verbatim_evidence: bool = True
+    budget_compress: bool = True
+    random_subqueries: bool = False
+    random_seed: int = 42
+
+
+# ---------------------------------------------------------------------------
 # Internal hit container (lightweight, not a Pydantic model for speed)
 # ---------------------------------------------------------------------------
 
@@ -160,6 +185,7 @@ class RecursiveContextController:
         max_subqueries: int = DEFAULT_MAX_SUBQUERIES,
         include_evidence: bool = DEFAULT_INCLUDE_EVIDENCE,
         mode: str = "balanced",
+        ablation: AblationConfig | None = None,
     ) -> RecursiveContextResult:
         """
         Recursively assemble a compact context pack for *query*.
@@ -195,7 +221,34 @@ class RecursiveContextController:
         )
 
         # 1. Decompose
-        subqueries = self._decompose_query(query, max_subqueries=max_subqueries, mode=mode)
+        if ablation is not None and ablation.random_subqueries:
+            # Random substrings of the query (takes precedence over decompose flag)
+            rng = random.Random(ablation.random_seed)
+            words = query.split()
+            subqueries: list[RecursiveSubquery] = []
+            attempts = 0
+            while len(subqueries) < max_subqueries and attempts < max_subqueries * 10:
+                attempts += 1
+                if len(words) < 2:
+                    break
+                slice_len = rng.randint(2, min(4, len(words)))
+                start = rng.randint(0, len(words) - slice_len)
+                substring = " ".join(words[start : start + slice_len])
+                subqueries.append(RecursiveSubquery(
+                    query=substring,
+                    purpose="random_substring",
+                    priority=1.0,
+                    retrieval_modes=["graph", "hybrid"],
+                ))
+        elif ablation is not None and not ablation.decompose:
+            subqueries = [RecursiveSubquery(
+                query=query,
+                purpose="original_query",
+                priority=1.0,
+                retrieval_modes=["graph", "hybrid"],
+            )]
+        else:
+            subqueries = self._decompose_query(query, max_subqueries=max_subqueries, mode=mode)
 
         # 2. Retrieve for each subquery
         all_hits: list[_Hit] = []
@@ -203,6 +256,17 @@ class RecursiveContextController:
         transcript_hits: list[Any] = []
 
         for sq in subqueries:
+            # Step 2 ablation: remove "verbatim" from retrieval_modes
+            if ablation is not None and not ablation.verbatim_evidence:
+                modes = [m for m in sq.retrieval_modes if m != "verbatim"]
+                if not modes:
+                    modes = ["graph", "hybrid"]
+                sq = RecursiveSubquery(
+                    query=sq.query,
+                    purpose=sq.purpose,
+                    priority=sq.priority,
+                    retrieval_modes=modes,
+                )
             hits, edges, transcripts = self._run_subquery(
                 sq,
                 scope=scope,
@@ -215,14 +279,18 @@ class RecursiveContextController:
             transcript_hits.extend(transcripts)
 
         # 3. Expand graph around top nodes
-        if all_hits and depth > 0:
+        if all_hits and depth > 0 and not (ablation is not None and not ablation.graph_expand):
             top_ids = [h.node_id for h in sorted(all_hits, key=lambda h: -h.score)[:5]]
             expanded_hits, expanded_edges = self._expand_graph(top_ids, scope=scope, depth=depth)
             all_hits.extend(expanded_hits)
             all_edges.extend(expanded_edges)
 
         # 4. Resolve updates and conflicts
-        all_hits, conflict_entries = self._resolve_updates_and_conflicts(all_hits, all_edges)
+        if ablation is not None and not ablation.conflict_resolve:
+            conflict_entries: list[Any] = []
+            # all_hits left unchanged
+        else:
+            all_hits, conflict_entries = self._resolve_updates_and_conflicts(all_hits, all_edges)
 
         # 5. Deduplicate
         all_hits = self._deduplicate_hits(all_hits)
@@ -231,12 +299,13 @@ class RecursiveContextController:
         all_hits = self._rank_hits(all_hits)
 
         # 7. Compress to budget
+        effective_budget = 999_999_999 if (ablation is not None and not ablation.budget_compress) else token_budget
         context_pack, nodes_used = self._compress_to_budget(
             query=query,
             hits=all_hits,
             conflicts=conflict_entries,
             transcript_hits=transcript_hits,
-            token_budget=token_budget,
+            token_budget=effective_budget,
         )
 
         elapsed = time.perf_counter() - t0

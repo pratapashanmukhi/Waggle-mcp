@@ -68,8 +68,10 @@ if _SRC.exists() and str(_SRC) not in sys.path:
 import numpy as np
 
 from waggle.graph import MemoryGraph
+from waggle.intelligence import tokenize_text
 from waggle.models import NodeType, RelationType
 from waggle.recursive_context import RecursiveContextController
+from waggle.retrieval.hybrid import SimpleBM25
 
 LOGGER = logging.getLogger(__name__)
 
@@ -123,6 +125,13 @@ class BenchResult:
     latency_ms: float = 0.0
     context_pack_tokens: int = 0
     notes: str = ""
+    seed: int = 42
+    token_budget: int = 0
+    ablation_variant: str = ""
+    delta_vs_full: float = 0.0
+    annotation: str = ""
+    mean_score: float = 0.0
+    std_score: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -325,12 +334,214 @@ def _run_hybrid_baseline(graph: MemoryGraph, query: str, token_budget: int) -> t
     return pack, latency
 
 
+def _run_bm25_topk(graph: MemoryGraph, query: str, token_budget: int) -> tuple[str, float]:
+    """bm25_topk: BM25 ranking over all nodes, concatenate top-k until budget."""
+    t0 = time.perf_counter()
+    try:
+        result = graph.aggregate(query=query, max_nodes=500, max_depth=0)
+        nodes = result.nodes
+        documents = {
+            node.id: list(tokenize_text(node.label + " " + node.content))
+            for node in nodes
+        }
+        bm25 = SimpleBM25(documents)
+        scores = bm25.score(query)
+        sorted_nodes = sorted(nodes, key=lambda n: scores.get(n.id, 0.0), reverse=True)
+        lines = []
+        used = 0
+        budget = int(token_budget * 1.15)
+        for node in sorted_nodes:
+            line = f"[{node.node_type.value}] {node.label}: {node.content}"
+            cost = token_estimate(line)
+            if used + cost > budget:
+                break
+            lines.append(line)
+            used += cost
+        pack = "\n".join(lines)
+    except Exception as exc:
+        LOGGER.debug("bm25_topk failed: %s", exc)
+        pack = ""
+    latency = (time.perf_counter() - t0) * 1000
+    return pack, latency
+
+
+def _run_vector_topk(graph: MemoryGraph, query: str, token_budget: int) -> tuple[str, float]:
+    """vector_topk: cosine similarity ranking over all nodes, concatenate top-k until budget."""
+    t0 = time.perf_counter()
+    try:
+        emb = _DeterministicEmbedding()
+        q_vec = emb.embed(query)
+        result = graph.aggregate(query=query, max_nodes=500, max_depth=0)
+        nodes = result.nodes
+        scored: list[tuple[float, Any]] = []
+        for node in nodes:
+            node_text = node.label + ": " + node.content
+            node_vec = emb.embed(node_text)
+            sim = emb.cosine_similarity(q_vec, node_vec)
+            scored.append((sim, node))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        lines = []
+        used = 0
+        budget = int(token_budget * 1.15)
+        for _, node in scored:
+            line = f"[{node.node_type.value}] {node.label}: {node.content}"
+            cost = token_estimate(line)
+            if used + cost > budget:
+                break
+            lines.append(line)
+            used += cost
+        pack = "\n".join(lines)
+    except Exception as exc:
+        LOGGER.debug("vector_topk failed: %s", exc)
+        pack = ""
+    latency = (time.perf_counter() - t0) * 1000
+    return pack, latency
+
+
+def _run_hybrid_rrf(graph: MemoryGraph, query: str, token_budget: int) -> tuple[str, float]:
+    """hybrid_rrf: fuse BM25 and vector rankings with Reciprocal Rank Fusion."""
+    t0 = time.perf_counter()
+    try:
+        result = graph.aggregate(query=query, max_nodes=500, max_depth=0)
+        nodes = result.nodes
+        if not nodes:
+            return "", (time.perf_counter() - t0) * 1000
+
+        # BM25 ranking
+        documents = {
+            node.id: list(tokenize_text(node.label + " " + node.content))
+            for node in nodes
+        }
+        bm25 = SimpleBM25(documents)
+        bm25_scores = bm25.score(query)
+        bm25_sorted = sorted(nodes, key=lambda n: bm25_scores.get(n.id, 0.0), reverse=True)
+        bm25_rank = {node.id: (i + 1) for i, node in enumerate(bm25_sorted)}
+
+        # Vector ranking
+        emb = _DeterministicEmbedding()
+        q_vec = emb.embed(query)
+        vec_scored: list[tuple[float, Any]] = []
+        for node in nodes:
+            node_text = node.label + ": " + node.content
+            node_vec = emb.embed(node_text)
+            sim = emb.cosine_similarity(q_vec, node_vec)
+            vec_scored.append((sim, node))
+        vec_scored.sort(key=lambda x: x[0], reverse=True)
+        vec_rank = {node.id: (i + 1) for i, (_, node) in enumerate(vec_scored)}
+
+        # RRF fusion
+        n = len(nodes)
+        rrf_scores: dict[str, float] = {}
+        for node in nodes:
+            br = bm25_rank.get(node.id, n + 1)
+            vr = vec_rank.get(node.id, n + 1)
+            rrf_scores[node.id] = 1.0 / (60 + br) + 1.0 / (60 + vr)
+
+        sorted_nodes = sorted(nodes, key=lambda n: rrf_scores.get(n.id, 0.0), reverse=True)
+        lines = []
+        used = 0
+        budget = int(token_budget * 1.15)
+        for node in sorted_nodes:
+            line = f"[{node.node_type.value}] {node.label}: {node.content}"
+            cost = token_estimate(line)
+            if used + cost > budget:
+                break
+            lines.append(line)
+            used += cost
+        pack = "\n".join(lines)
+    except Exception as exc:
+        LOGGER.debug("hybrid_rrf failed: %s", exc)
+        pack = ""
+    latency = (time.perf_counter() - t0) * 1000
+    return pack, latency
+
+
+def _run_graph_expansion_no_recursion(graph: MemoryGraph, query: str, token_budget: int) -> tuple[str, float]:
+    """graph_expansion_no_recursion: single query + one-hop neighbour expansion, no subquery decomposition."""
+    t0 = time.perf_counter()
+    try:
+        result = graph.query(query=query, max_nodes=20, max_depth=1, retrieval_mode="hybrid")
+        all_nodes: dict[str, Any] = {node.id: node for node in result.nodes}
+        for node in list(result.nodes):
+            try:
+                related = graph.get_related(node_id=node.id, max_depth=1)
+                for rnode in related.nodes:
+                    if rnode.id not in all_nodes:
+                        all_nodes[rnode.id] = rnode
+            except Exception as exc:
+                LOGGER.debug("graph_expansion_no_recursion get_related failed for %s: %s", node.id, exc)
+        lines = []
+        used = 0
+        budget = int(token_budget * 1.15)
+        for node in all_nodes.values():
+            line = f"[{node.node_type.value}] {node.label}: {node.content}"
+            cost = token_estimate(line)
+            if used + cost > budget:
+                break
+            lines.append(line)
+            used += cost
+        pack = "\n".join(lines)
+    except Exception as exc:
+        LOGGER.debug("graph_expansion_no_recursion failed: %s", exc)
+        pack = ""
+    latency = (time.perf_counter() - t0) * 1000
+    return pack, latency
+
+
+def _run_summary_memory(graph: MemoryGraph, query: str, token_budget: int) -> tuple[str, float]:
+    """summary_memory: use prime_context summary, truncated to budget."""
+    t0 = time.perf_counter()
+    try:
+        result = graph.prime_context()
+        summary = result.summary or ""
+        pack = summary[: int(token_budget * 1.15)]
+    except Exception as exc:
+        LOGGER.debug("summary_memory failed: %s", exc)
+        pack = ""
+    latency = (time.perf_counter() - t0) * 1000
+    return pack, latency
+
+
+def _run_full_transcript_truncation(graph: MemoryGraph, query: str, token_budget: int) -> tuple[str, float]:
+    """full_transcript_truncation: load transcript records in reverse-chronological order, concatenate until budget."""
+    t0 = time.perf_counter()
+    try:
+        lines = []
+        used = 0
+        budget = int(token_budget * 1.15)
+        with graph._lock, graph._connect() as conn:
+            rows = conn.execute(
+                "SELECT role, transcript_text FROM transcript_records "
+                "WHERE tenant_id = ? ORDER BY observed_at DESC LIMIT 200",
+                (graph.tenant_id,),
+            ).fetchall()
+        for row in rows:
+            line = f"{row['role']}: {row['transcript_text']}"
+            cost = token_estimate(line)
+            if used + cost > budget:
+                break
+            lines.append(line)
+            used += cost
+        pack = "\n".join(lines)
+    except Exception as exc:
+        LOGGER.debug("full_transcript_truncation failed: %s", exc)
+        pack = ""
+    latency = (time.perf_counter() - t0) * 1000
+    return pack, latency
+
+
 _METHOD_RUNNERS = {
     "raw_context": _run_raw_context,
     "query_graph": _run_query_graph,
     "prime_context": _run_prime_context,
     "build_context": _run_build_context,
     "hybrid_baseline": _run_hybrid_baseline,
+    "bm25_topk": _run_bm25_topk,
+    "vector_topk": _run_vector_topk,
+    "hybrid_rrf": _run_hybrid_rrf,
+    "graph_expansion_no_recursion": _run_graph_expansion_no_recursion,
+    "summary_memory": _run_summary_memory,
+    "full_transcript_truncation": _run_full_transcript_truncation,
 }
 
 
@@ -1093,6 +1304,345 @@ def run_codeqa_benchmark(
 
 
 # ---------------------------------------------------------------------------
+# 6. ContextReset benchmark family
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ContextResetCase:
+    """One ContextReset benchmark case."""
+    case_id: str
+    question: str
+    difficulty: str  # "easy" | "hard"
+    gold_decision_ids: list[str]
+    gold_constraint_ids: list[str]
+    gold_next_step_id: str
+    gold_superseded_id: str
+    gold_active_decision_id: str  # source of the updates edge
+    scale_n: int
+
+
+def generate_context_reset_cases(
+    graph: MemoryGraph,
+    scale_n: int,
+    rng: random.Random,
+    difficulty: str = "easy",
+    project: str = "context_reset",
+) -> list[ContextResetCase]:
+    """
+    Generate ContextReset benchmark cases.
+
+    Easy path: 1 decision, 1 constraint, 1 next-step, 1 superseded decision,
+    fill remaining slots with distractors from 1 unrelated project.
+
+    Hard path: 3+ decisions, 1 superseded decision, contradicts edge, rejected
+    direction node, bug node, 1 next-step, fill remaining slots with distractors
+    from 2 unrelated projects.
+    """
+    if difficulty == "easy":
+        # Active decision
+        r_decision = graph.add_node(
+            label="Use PostgreSQL for storage",
+            content="We decided to use PostgreSQL as the primary database.",
+            node_type=NodeType.DECISION,
+            project=project,
+        )
+        # Constraint
+        r_constraint = graph.add_node(
+            label="Must run locally",
+            content="The system must run fully locally with no cloud dependency.",
+            node_type=NodeType.PREFERENCE,
+            project=project,
+        )
+        # Next-step
+        r_next_step = graph.add_node(
+            label="Next: implement connection pooling",
+            content="The next step is to implement connection pooling for PostgreSQL.",
+            node_type=NodeType.QUESTION,
+            project=project,
+        )
+        # Superseded decision
+        r_superseded = graph.add_node(
+            label="Use SQLite for storage",
+            content="We initially considered SQLite but decided against it.",
+            node_type=NodeType.DECISION,
+            project=project,
+        )
+        # updates edge: active → superseded
+        graph.add_edge(
+            source_id=r_decision.node.id,
+            target_id=r_superseded.node.id,
+            relationship="updates",
+        )
+        # Fill remaining slots with distractors
+        filled = 4
+        for i in range(max(0, scale_n - filled)):
+            graph.add_node(
+                label=f"Distractor {i}",
+                content=f"Unrelated fact {i} about project alpha.",
+                node_type=NodeType.FACT,
+                project="distractor_alpha",
+            )
+        return [ContextResetCase(
+            case_id=f"context_reset_easy_{scale_n}",
+            question="Continue from where we left off",
+            difficulty="easy",
+            gold_decision_ids=[r_decision.node.id],
+            gold_constraint_ids=[r_constraint.node.id],
+            gold_next_step_id=r_next_step.node.id,
+            gold_superseded_id=r_superseded.node.id,
+            gold_active_decision_id=r_decision.node.id,
+            scale_n=scale_n,
+        )]
+
+    else:  # hard
+        # Three active decisions
+        r_fastapi = graph.add_node(
+            label="Use FastAPI",
+            content="We decided to use FastAPI as the web framework.",
+            node_type=NodeType.DECISION,
+            project=project,
+        )
+        r_postgres = graph.add_node(
+            label="Use PostgreSQL",
+            content="We decided to use PostgreSQL as the primary database.",
+            node_type=NodeType.DECISION,
+            project=project,
+        )
+        r_local_emb = graph.add_node(
+            label="Use local embeddings",
+            content="We decided to use local embeddings for vector search.",
+            node_type=NodeType.DECISION,
+            project=project,
+        )
+        # Superseded decision
+        r_flask = graph.add_node(
+            label="Use Flask",
+            content="We initially considered Flask but switched to FastAPI.",
+            node_type=NodeType.DECISION,
+            project=project,
+        )
+        # updates edge: FastAPI → Flask
+        graph.add_edge(
+            source_id=r_fastapi.node.id,
+            target_id=r_flask.node.id,
+            relationship="updates",
+        )
+        # Constraint
+        r_constraint = graph.add_node(
+            label="No external APIs",
+            content="The system must not use any external APIs.",
+            node_type=NodeType.PREFERENCE,
+            project=project,
+        )
+        # Contradicts edge: PostgreSQL vs hosted RDS
+        r_hosted_rds = graph.add_node(
+            label="Use hosted RDS",
+            content="An alternative was to use hosted RDS on AWS.",
+            node_type=NodeType.DECISION,
+            project=project,
+        )
+        graph.add_edge(
+            source_id=r_postgres.node.id,
+            target_id=r_hosted_rds.node.id,
+            relationship=RelationType.CONTRADICTS.value,
+        )
+        # Rejected direction
+        r_rejected = graph.add_node(
+            label="Rejected: use microservices",
+            content="We rejected a microservices architecture due to complexity.",
+            node_type=NodeType.NOTE,
+            project=project,
+            tags=["rejected"],
+        )
+        # Bug node
+        r_bug = graph.add_node(
+            label="Bug: connection timeout",
+            content="There is a known connection timeout bug in the database layer.",
+            node_type=NodeType.NOTE,
+            project=project,
+            tags=["bug"],
+        )
+        # Next-step
+        r_next_step = graph.add_node(
+            label="Next: add rate limiting",
+            content="The next step is to add rate limiting to the API.",
+            node_type=NodeType.QUESTION,
+            project=project,
+        )
+        # Fill remaining slots with distractors from 2 unrelated projects
+        filled = 9  # fastapi, postgres, local_emb, flask, constraint, hosted_rds, rejected, bug, next_step
+        for i in range(max(0, scale_n - filled)):
+            proj = "distractor_alpha" if i % 2 == 0 else "distractor_beta"
+            graph.add_node(
+                label=f"Distractor {i}",
+                content=f"Unrelated fact {i} about project {proj}.",
+                node_type=NodeType.FACT,
+                project=proj,
+            )
+        return [ContextResetCase(
+            case_id=f"context_reset_hard_{scale_n}",
+            question="Continue from where we left off",
+            difficulty="hard",
+            gold_decision_ids=[r_fastapi.node.id, r_postgres.node.id, r_local_emb.node.id],
+            gold_constraint_ids=[r_constraint.node.id],
+            gold_next_step_id=r_next_step.node.id,
+            gold_superseded_id=r_flask.node.id,
+            gold_active_decision_id=r_fastapi.node.id,
+            scale_n=scale_n,
+        )]
+
+
+def _score_context_reset(
+    pack: str,
+    case: ContextResetCase,
+    graph: MemoryGraph,
+) -> dict[str, float]:
+    """Compute the six ContextReset scoring fields."""
+    pack_lower = pack.lower()
+
+    # Helper: get node label by id
+    def _label(node_id: str) -> str:
+        try:
+            node = graph.get_node(node_id)
+            return node.label if node else ""
+        except Exception:
+            return ""
+
+    # decision_recall: fraction of gold_decision_ids whose label appears in pack
+    decision_labels = [_label(nid) for nid in case.gold_decision_ids]
+    decision_found = sum(1 for lbl in decision_labels if lbl and lbl.lower() in pack_lower)
+    decision_recall = decision_found / max(len(case.gold_decision_ids), 1)
+
+    # constraint_recall: fraction of gold_constraint_ids whose label appears in pack
+    constraint_labels = [_label(nid) for nid in case.gold_constraint_ids]
+    constraint_found = sum(1 for lbl in constraint_labels if lbl and lbl.lower() in pack_lower)
+    constraint_recall = constraint_found / max(len(case.gold_constraint_ids), 1)
+
+    # next_step_accuracy: 1.0 if next-step node label appears in pack
+    next_step_label = _label(case.gold_next_step_id)
+    next_step_accuracy = 1.0 if next_step_label and next_step_label.lower() in pack_lower else 0.0
+
+    # superseded_context_handling: 1.0 if superseded label absent OR appears after "Superseded context:" header
+    superseded_label = _label(case.gold_superseded_id)
+    if not superseded_label or superseded_label.lower() not in pack_lower:
+        superseded_context_handling = 1.0
+    else:
+        # Check if it appears only in a superseded section
+        sup_header_idx = pack_lower.find("superseded context")
+        sup_label_idx = pack_lower.find(superseded_label.lower())
+        if sup_header_idx >= 0 and sup_label_idx > sup_header_idx:
+            superseded_context_handling = 1.0
+        else:
+            superseded_context_handling = 0.0
+
+    # active_decision_preference
+    active_label = _label(case.gold_active_decision_id)
+    active_in_pack = bool(active_label and active_label.lower() in pack_lower)
+    # "active sections" = pack before any "Superseded context:" header
+    sup_header_idx = pack_lower.find("superseded context")
+    if sup_header_idx >= 0:
+        active_section = pack_lower[:sup_header_idx]
+    else:
+        active_section = pack_lower
+    superseded_in_active = bool(superseded_label and superseded_label.lower() in active_section)
+    active_in_active = bool(active_label and active_label.lower() in active_section)
+
+    if active_in_active and not superseded_in_active:
+        active_decision_preference = 1.0
+    elif active_in_active and superseded_in_active:
+        active_decision_preference = 0.5
+    elif not active_in_active and superseded_in_active:
+        active_decision_preference = 0.0
+    else:
+        active_decision_preference = 0.0
+
+    # evidence_coverage: fraction of all gold node IDs whose labels appear in pack
+    all_gold_ids = (
+        case.gold_decision_ids
+        + case.gold_constraint_ids
+        + [case.gold_next_step_id, case.gold_superseded_id]
+    )
+    all_gold_labels = [_label(nid) for nid in all_gold_ids]
+    ev_found = sum(1 for lbl in all_gold_labels if lbl and lbl.lower() in pack_lower)
+    ev_coverage = ev_found / max(len(all_gold_ids), 1)
+
+    return {
+        "decision_recall": decision_recall,
+        "constraint_recall": constraint_recall,
+        "next_step_accuracy": next_step_accuracy,
+        "superseded_context_handling": superseded_context_handling,
+        "active_decision_preference": active_decision_preference,
+        "evidence_coverage": ev_coverage,
+    }
+
+
+def run_context_reset_benchmark(
+    db_path: str,
+    scale_n: int,
+    methods: list[str],
+    token_budget: int,
+    rng: random.Random,
+    difficulty: str = "easy",
+    include_latency: bool = True,
+    verbose: bool = False,
+) -> list[BenchResult]:
+    """Run ContextReset benchmark at a given scale."""
+    graph = _make_graph(db_path)
+    cases = generate_context_reset_cases(graph, scale_n=scale_n, rng=rng, difficulty=difficulty)
+    results = []
+    output_dir = "benchmark_results/partial/context_reset"
+
+    for case in cases:
+        if verbose:
+            print(f"  [ContextReset/{difficulty}] scale={scale_n} question={case.question!r}")
+
+        for method in methods:
+            if method == "no_memory":
+                pack = ""
+                latency = 0.0
+            elif method in ("rmca_full", "build_context"):
+                pack, latency = _run_build_context(graph, case.question, token_budget)
+            else:
+                runner = _METHOD_RUNNERS.get(method)
+                if runner is None:
+                    continue
+                pack, latency = runner(graph, case.question, token_budget)
+
+            scoring = _score_context_reset(pack, case, graph)
+            score = (
+                scoring["decision_recall"]
+                + scoring["constraint_recall"]
+                + scoring["next_step_accuracy"]
+                + scoring["active_decision_preference"]
+            ) / 4.0
+
+            results.append(BenchResult(
+                benchmark_family="ContextReset",
+                scale_n=scale_n,
+                method=method,
+                score=score,
+                exact_match=scoring["next_step_accuracy"],
+                f1=scoring["decision_recall"],
+                evidence_coverage=scoring["evidence_coverage"],
+                tokens_returned=token_estimate(pack),
+                latency_ms=round(latency, 1) if include_latency else 0.0,
+                context_pack_tokens=token_estimate(pack),
+                notes=json.dumps(scoring),
+            ))
+
+            if verbose:
+                print(
+                    f"    {method}: score={score:.2f} "
+                    f"dec_recall={scoring['decision_recall']:.2f} "
+                    f"tokens={token_estimate(pack)}"
+                )
+
+    write_results(results, output_dir)
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Real dataset TODO stubs
 # ---------------------------------------------------------------------------
 
@@ -1282,6 +1832,7 @@ _BENCHMARK_RUNNERS = {
     "linear_agg": run_linear_agg_benchmark,
     "pairwise": run_pairwise_benchmark,
     "codeqa": run_codeqa_benchmark,
+    "context_reset": run_context_reset_benchmark,
 }
 
 _ALL_FAMILIES = list(_BENCHMARK_RUNNERS.keys())
