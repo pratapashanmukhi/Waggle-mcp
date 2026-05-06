@@ -9,6 +9,7 @@ For self-hosted production planning:
 - [Production deployment guide](deployment/production.md)
 - [Security model](security/security-model.md)
 - [Hardening checklist](security/hardening-checklist.md)
+- [Waggle Plus integration contract](plus-integration.md)
 
 ## Installation variants
 

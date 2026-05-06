@@ -4,10 +4,18 @@ import os
 from dataclasses import dataclass
 from importlib import import_module
 from importlib.metadata import PackageNotFoundError, version as package_version
-from typing import Any
+from typing import Any, Protocol
 
 _DEFAULT_PLUS_MODULE = "waggle_plus"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+PLUS_CAPABILITY_OIDC_SSO = "oidc_sso"
+PLUS_CAPABILITY_RBAC = "rbac"
+
+
+class IdentityProviderProtocol(Protocol):
+    def status(self) -> dict[str, Any]: ...
+
+    def authorize_url(self, *, redirect_uri: str, state: str) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +125,37 @@ def load_identity_provider(module_name: str | None = None) -> tuple[PlusStatus, 
         return status, provider_factory()
     provider = getattr(module, "WAGGLE_PLUS_IDENTITY_PROVIDER", None)
     return status, provider
+
+
+def validate_identity_provider(provider: Any) -> list[str]:
+    if provider is None:
+        return ["status", "authorize_url"]
+    missing: list[str] = []
+    for method_name in ("status", "authorize_url"):
+        if not callable(getattr(provider, method_name, None)):
+            missing.append(method_name)
+    return missing
+
+
+def describe_plus_contract(module_name: str | None = None) -> dict[str, Any]:
+    resolved_name = _resolve_module_name(module_name)
+    return {
+        "module_name": resolved_name,
+        "distribution": "private-package",
+        "capabilities": {
+            "identity": [PLUS_CAPABILITY_OIDC_SSO],
+            "access_control": [PLUS_CAPABILITY_RBAC],
+        },
+        "identity_provider": {
+            "factory": "build_identity_provider",
+            "fallback_attribute": "WAGGLE_PLUS_IDENTITY_PROVIDER",
+            "required_methods": ["status", "authorize_url"],
+            "reserved_routes": [
+                {"path": "/api/admin/identity/provider", "method": "GET", "required_scope": "admin:read"},
+                {"path": "/api/admin/identity/authorize", "method": "POST", "required_scope": "admin:read"},
+            ],
+        },
+    }
 
 
 def _read_capabilities(module: Any) -> tuple[str, ...]:

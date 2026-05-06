@@ -342,6 +342,32 @@ def test_plus_command_reports_detected_module(
     assert "Installed: yes" in stdout
     assert "Version: 1.2.3" in stdout
     assert "advanced_context, contradiction_intelligence" in stdout
+    assert "Identity provider factory: build_identity_provider" in stdout
+    assert "/api/admin/identity/provider" in stdout
+
+
+def test_plus_command_json_includes_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake_plus = ModuleType("waggle_plus")
+    fake_plus.__version__ = "1.2.3"
+    fake_plus.WAGGLE_PLUS_CAPABILITIES = ("oidc_sso", "rbac")
+    monkeypatch.delenv("WAGGLE_PLUS_MODULE", raising=False)
+    monkeypatch.delenv("WAGGLE_PLUS_DISABLED", raising=False)
+    monkeypatch.setitem(sys.modules, "waggle_plus", fake_plus)
+
+    try:
+        exit_code = _run_plus_command(SimpleNamespace(json=True))
+        payload = json.loads(capsys.readouterr().out)
+    finally:
+        sys.modules.pop("waggle_plus", None)
+
+    assert exit_code == 0
+    assert payload["plus"]["installed"] is True
+    assert payload["contract"]["module_name"] == "waggle_plus"
+    assert payload["contract"]["identity_provider"]["factory"] == "build_identity_provider"
+    assert payload["contract"]["identity_provider"]["reserved_routes"][0]["path"] == "/api/admin/identity/provider"
 
 
 def test_create_and_list_api_keys_cli_redacts_hash(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

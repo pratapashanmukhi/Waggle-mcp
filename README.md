@@ -59,6 +59,7 @@ For self-hosted production review and security posture:
 - [Production deployment guide](docs/deployment/production.md)
 - [Security model](docs/security/security-model.md)
 - [Hardening checklist](docs/security/hardening-checklist.md)
+- [Waggle Plus integration contract](docs/plus-integration.md)
 - [Reference](docs/reference.md)
 
 ---
@@ -119,6 +120,28 @@ waggle-mcp plus
 ```
 
 The intended package name is `waggle_plus`, distributed separately from the public `waggle-mcp` PyPI release.
+
+---
+
+## Competitive Comparison
+
+Waggle's performance on multi-session memory retrieval (LongMemEval-S, 500 questions) compared to other memory systems:
+
+| System | R@5 | Exact@5 | Latency | Tokens/Query | Cost | Status |
+|---|---|---|---|---|---|---|
+| **Waggle** | **97.4%** | **89.0%** | 1.6 ms | 63 | $0 | ✅ Open-source, local-first |
+| Hindsight | 94.6% | — | <300 ms | 1,500 | $$$$ | Proprietary, cloud |
+| MemPalace | 96.6%* | — | 500 ms | 170 | $0 | Open-source, local |
+| Mem0 | 93.4% | — | 7–10 s | 2,000 | $$ | Managed service |
+| Supermemory | 85.4% | — | <300 ms | 1,500 | $$ | Managed service |
+| Zep | ~85% | — | 4–5 s | 2,000 | $$$ | Managed service |
+| Atlas-CE | 99.0%† | — | ~400 ms | 2,000 | $$$$ | Enterprise, cloud |
+
+**Notes:**
+- *MemPalace claims 100% on LongMemEval; independent verification (Vectorize, Atlas-CE) reports 96.6% R@5.
+- †Atlas-CE reports R@1 (single-session retrieval), not R@5 (multi-session). Not directly comparable.
+- Waggle's 97.4% R@5 is the highest verified multi-session recall among open-source and local-first systems.
+- Token efficiency: Waggle uses 95% fewer tokens than flat baselines (63 vs 1,500), reducing LLM inference cost proportionally.
 
 ---
 

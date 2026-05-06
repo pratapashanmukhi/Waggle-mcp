@@ -89,7 +89,15 @@ from waggle.models import (
     TranscriptMessage,
     utc_now,
 )
-from waggle.plus import PlusStatus, detect_plus, has_plus_capability, load_identity_provider
+from waggle.plus import (
+    PLUS_CAPABILITY_OIDC_SSO,
+    PlusStatus,
+    describe_plus_contract,
+    detect_plus,
+    has_plus_capability,
+    load_identity_provider,
+    validate_identity_provider,
+)
 from waggle.rate_limit import RateLimiter
 from waggle.runtime_context import runtime_context
 from waggle.recursive_context import (
@@ -2804,30 +2812,36 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
 
     def _plus_identity_provider_response() -> tuple[PlusStatus, Any | None, JSONResponse | None]:
         status, provider = load_identity_provider()
+        contract = describe_plus_contract(status.module_name)
         if not status.installed:
             return status, None, JSONResponse(
                 {
                     "error": "plus_required",
                     "message": "Waggle Plus identity integration is coming soon.",
                     "plus": status.as_dict(),
+                    "contract": contract,
                 },
                 status_code=501,
             )
-        if not has_plus_capability("oidc_sso"):
+        if not has_plus_capability(PLUS_CAPABILITY_OIDC_SSO):
             return status, None, JSONResponse(
                 {
                     "error": "plus_capability_missing",
                     "message": "Installed Waggle Plus module does not advertise OIDC SSO support.",
                     "plus": status.as_dict(),
+                    "contract": contract,
                 },
                 status_code=501,
             )
-        if provider is None:
+        missing_methods = validate_identity_provider(provider)
+        if missing_methods:
             return status, None, JSONResponse(
                 {
                     "error": "plus_provider_missing",
-                    "message": "Waggle Plus is installed but did not provide an identity provider.",
+                    "message": "Waggle Plus is installed but did not provide a compatible identity provider.",
                     "plus": status.as_dict(),
+                    "contract": contract,
+                    "missing_methods": missing_methods,
                 },
                 status_code=500,
             )
@@ -3562,6 +3576,7 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
         return JSONResponse(
             {
                 "plus": status.as_dict(),
+                "contract": describe_plus_contract(status.module_name),
                 "provider": status_payload,
             }
         )
@@ -3591,6 +3606,7 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
             {
                 "authorize_url": str(authorize_url),
                 "plus": status.as_dict(),
+                "contract": describe_plus_contract(status.module_name),
             }
         )
 
@@ -5011,8 +5027,9 @@ def _run_doctor(config: AppConfig, *, fix: bool = False) -> int:
 
 def _run_plus_command(args: argparse.Namespace) -> int:
     status = detect_plus()
+    contract = describe_plus_contract(status.module_name)
     if bool(getattr(args, "json", False)):
-        print(json.dumps(status.as_dict(), indent=2))
+        print(json.dumps({"plus": status.as_dict(), "contract": contract}, indent=2))
         return 0
 
     print()
@@ -5026,6 +5043,8 @@ def _run_plus_command(args: argparse.Namespace) -> int:
         print(f"  Version: {status.version}")
     if status.capabilities:
         print(f"  Capabilities: {', '.join(status.capabilities)}")
+    print(f"  Identity provider factory: {contract['identity_provider']['factory']}")
+    print(f"  Reserved routes: {', '.join(route['path'] for route in contract['identity_provider']['reserved_routes'])}")
     if status.import_error:
         print(f"  Import error: {status.import_error}")
     if not status.installed:

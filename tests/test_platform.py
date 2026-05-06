@@ -627,6 +627,7 @@ def test_http_identity_provider_routes_require_plus(tmp_path: Path) -> None:
         provider = client.get("/api/admin/identity/provider")
         assert provider.status_code == 501
         assert provider.json()["error"] == "plus_required"
+        assert provider.json()["contract"]["identity_provider"]["factory"] == "build_identity_provider"
 
 
 def test_http_identity_provider_routes_use_plus_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -656,6 +657,7 @@ def test_http_identity_provider_routes_use_plus_provider(tmp_path: Path, monkeyp
             provider = client.get("/api/admin/identity/provider")
             assert provider.status_code == 200
             assert provider.json()["provider"]["issuer"] == "https://id.example.com"
+            assert provider.json()["contract"]["identity_provider"]["reserved_routes"][0]["path"] == "/api/admin/identity/provider"
 
             authorize = client.post(
                 "/api/admin/identity/authorize",
@@ -663,5 +665,6 @@ def test_http_identity_provider_routes_use_plus_provider(tmp_path: Path, monkeyp
             )
             assert authorize.status_code == 200
             assert "state=state-123" in authorize.json()["authorize_url"]
+            assert authorize.json()["contract"]["capabilities"]["identity"] == ["oidc_sso"]
     finally:
         sys.modules.pop("waggle_plus", None)
