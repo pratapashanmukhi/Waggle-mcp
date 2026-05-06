@@ -3610,6 +3610,119 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
             }
         )
 
+    async def admin_identity_callback(request: Request) -> Response:
+        payload = await request.json()
+        _require_http_scope(request, "admin:read")
+        status, provider, error_response = _plus_identity_provider_response()
+        if error_response is not None:
+            return error_response
+        exchange_code_fn = getattr(provider, "exchange_code", None)
+        if not callable(exchange_code_fn):
+            return JSONResponse(
+                {
+                    "error": "plus_provider_missing_method",
+                    "message": "Identity provider does not expose exchange_code().",
+                    "plus": status.as_dict(),
+                    "contract": describe_plus_contract(status.module_name),
+                },
+                status_code=500,
+            )
+        code = str(payload.get("code", "")).strip()
+        redirect_uri = str(payload.get("redirect_uri", "")).strip()
+        state = str(payload.get("state", "")).strip()
+        if not code:
+            raise ValidationFailure("code is required.")
+        if not redirect_uri:
+            raise ValidationFailure("redirect_uri is required.")
+        session_payload = exchange_code_fn(code=code, redirect_uri=redirect_uri, state=state)
+        if not isinstance(session_payload, dict):
+            raise ValidationFailure("Identity provider exchange_code() must return an object.")
+        subject = str(session_payload.get("subject", "")).strip()
+        if not subject:
+            raise ValidationFailure("Identity provider session payload must include subject.")
+        return JSONResponse(
+            {
+                "session": session_payload,
+                "plus": status.as_dict(),
+                "contract": describe_plus_contract(status.module_name),
+            }
+        )
+
+    async def admin_identity_roles_resolve(request: Request) -> Response:
+        payload = await request.json()
+        _require_http_scope(request, "admin:read")
+        status, provider, error_response = _plus_identity_provider_response()
+        if error_response is not None:
+            return error_response
+        map_roles_fn = getattr(provider, "map_roles", None)
+        if not callable(map_roles_fn):
+            return JSONResponse(
+                {
+                    "error": "plus_provider_missing_method",
+                    "message": "Identity provider does not expose map_roles().",
+                    "plus": status.as_dict(),
+                    "contract": describe_plus_contract(status.module_name),
+                },
+                status_code=500,
+            )
+        session_payload = payload.get("session")
+        if not isinstance(session_payload, dict):
+            raise ValidationFailure("session is required and must be an object.")
+        resolved = map_roles_fn(session=session_payload)
+        if not isinstance(resolved, dict):
+            raise ValidationFailure("Identity provider map_roles() must return an object.")
+        primary_role = str(resolved.get("primary_role", "")).strip()
+        if not primary_role:
+            raise ValidationFailure("Role mapping payload must include primary_role.")
+        return JSONResponse(
+            {
+                "resolved": resolved,
+                "plus": status.as_dict(),
+                "contract": describe_plus_contract(status.module_name),
+            }
+        )
+
+    async def admin_identity_permissions_check(request: Request) -> Response:
+        payload = await request.json()
+        _require_http_scope(request, "admin:read")
+        status, provider, error_response = _plus_identity_provider_response()
+        if error_response is not None:
+            return error_response
+        check_permission_fn = getattr(provider, "check_permission", None)
+        if not callable(check_permission_fn):
+            return JSONResponse(
+                {
+                    "error": "plus_provider_missing_method",
+                    "message": "Identity provider does not expose check_permission().",
+                    "plus": status.as_dict(),
+                    "contract": describe_plus_contract(status.module_name),
+                },
+                status_code=500,
+            )
+        resolved = payload.get("resolved")
+        if not isinstance(resolved, dict):
+            raise ValidationFailure("resolved is required and must be an object.")
+        permission = str(payload.get("permission", "")).strip()
+        if not permission:
+            raise ValidationFailure("permission is required.")
+        decision = check_permission_fn(
+            resolved=resolved,
+            permission=permission,
+            resource_type=str(payload.get("resource_type", "")).strip(),
+            resource_id=str(payload.get("resource_id", "")).strip(),
+        )
+        if not isinstance(decision, dict):
+            raise ValidationFailure("Identity provider check_permission() must return an object.")
+        if "allowed" not in decision:
+            raise ValidationFailure("Permission decision payload must include allowed.")
+        return JSONResponse(
+            {
+                "decision": decision,
+                "plus": status.as_dict(),
+                "contract": describe_plus_contract(status.module_name),
+            }
+        )
+
     app = Starlette(
         routes=[
             Route("/health/live", live),
@@ -3641,6 +3754,9 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
             Route("/api/admin/audit-events", admin_audit_events, methods=["GET"]),
             Route("/api/admin/identity/provider", admin_identity_provider, methods=["GET"]),
             Route("/api/admin/identity/authorize", admin_identity_authorize, methods=["POST"]),
+            Route("/api/admin/identity/callback", admin_identity_callback, methods=["POST"]),
+            Route("/api/admin/identity/roles/resolve", admin_identity_roles_resolve, methods=["POST"]),
+            Route("/api/admin/identity/permissions/check", admin_identity_permissions_check, methods=["POST"]),
             Mount("/graph-assets", app=StaticFiles(packages=[("waggle", "static/graph")], html=False, check_dir=False)),
             Mount("/mcp", app=service.mcp_asgi),
         ],

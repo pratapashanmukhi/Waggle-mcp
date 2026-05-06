@@ -17,6 +17,19 @@ class IdentityProviderProtocol(Protocol):
 
     def authorize_url(self, *, redirect_uri: str, state: str) -> str: ...
 
+    def exchange_code(self, *, code: str, redirect_uri: str, state: str) -> dict[str, Any]: ...
+
+    def map_roles(self, *, session: dict[str, Any]) -> dict[str, Any]: ...
+
+    def check_permission(
+        self,
+        *,
+        resolved: dict[str, Any],
+        permission: str,
+        resource_type: str = "",
+        resource_id: str = "",
+    ) -> dict[str, Any]: ...
+
 
 @dataclass(frozen=True, slots=True)
 class PlusStatus:
@@ -129,9 +142,9 @@ def load_identity_provider(module_name: str | None = None) -> tuple[PlusStatus, 
 
 def validate_identity_provider(provider: Any) -> list[str]:
     if provider is None:
-        return ["status", "authorize_url"]
+        return ["status", "authorize_url", "exchange_code", "map_roles", "check_permission"]
     missing: list[str] = []
-    for method_name in ("status", "authorize_url"):
+    for method_name in ("status", "authorize_url", "exchange_code", "map_roles", "check_permission"):
         if not callable(getattr(provider, method_name, None)):
             missing.append(method_name)
     return missing
@@ -149,11 +162,27 @@ def describe_plus_contract(module_name: str | None = None) -> dict[str, Any]:
         "identity_provider": {
             "factory": "build_identity_provider",
             "fallback_attribute": "WAGGLE_PLUS_IDENTITY_PROVIDER",
-            "required_methods": ["status", "authorize_url"],
+            "required_methods": ["status", "authorize_url", "exchange_code", "map_roles", "check_permission"],
             "reserved_routes": [
                 {"path": "/api/admin/identity/provider", "method": "GET", "required_scope": "admin:read"},
                 {"path": "/api/admin/identity/authorize", "method": "POST", "required_scope": "admin:read"},
+                {"path": "/api/admin/identity/callback", "method": "POST", "required_scope": "admin:read"},
+                {"path": "/api/admin/identity/roles/resolve", "method": "POST", "required_scope": "admin:read"},
+                {"path": "/api/admin/identity/permissions/check", "method": "POST", "required_scope": "admin:read"},
             ],
+            "session_payload": {
+                "required_fields": ["subject"],
+                "optional_fields": ["issuer", "email", "display_name", "roles", "expires_at"],
+            },
+            "role_mapping": {
+                "required_fields": ["primary_role"],
+                "optional_fields": ["roles", "permissions", "source_claims"],
+                "supported_roles": ["Owner", "Admin", "Developer", "Viewer", "Auditor"],
+            },
+            "permission_check": {
+                "required_fields": ["allowed"],
+                "optional_fields": ["reason", "matched_roles", "matched_permissions"],
+            },
         },
     }
 

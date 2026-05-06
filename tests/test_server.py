@@ -344,6 +344,9 @@ def test_plus_command_reports_detected_module(
     assert "advanced_context, contradiction_intelligence" in stdout
     assert "Identity provider factory: build_identity_provider" in stdout
     assert "/api/admin/identity/provider" in stdout
+    assert "/api/admin/identity/callback" in stdout
+    assert "/api/admin/identity/roles/resolve" in stdout
+    assert "/api/admin/identity/permissions/check" in stdout
 
 
 def test_plus_command_json_includes_contract(
@@ -368,6 +371,9 @@ def test_plus_command_json_includes_contract(
     assert payload["contract"]["module_name"] == "waggle_plus"
     assert payload["contract"]["identity_provider"]["factory"] == "build_identity_provider"
     assert payload["contract"]["identity_provider"]["reserved_routes"][0]["path"] == "/api/admin/identity/provider"
+    assert payload["contract"]["identity_provider"]["required_methods"] == ["status", "authorize_url", "exchange_code", "map_roles", "check_permission"]
+    assert payload["contract"]["identity_provider"]["role_mapping"]["supported_roles"] == ["Owner", "Admin", "Developer", "Viewer", "Auditor"]
+    assert payload["contract"]["identity_provider"]["permission_check"]["required_fields"] == ["allowed"]
 
 
 def test_create_and_list_api_keys_cli_redacts_hash(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

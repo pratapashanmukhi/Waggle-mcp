@@ -220,6 +220,9 @@ GET   /api/admin/retention/runs
 GET   /api/admin/audit-events
 GET   /api/admin/identity/provider
 POST  /api/admin/identity/authorize
+POST  /api/admin/identity/callback
+POST  /api/admin/identity/roles/resolve
+POST  /api/admin/identity/permissions/check
 ```
 
 These endpoints can scope by `X-API-Key` or explicit `tenant_id`.

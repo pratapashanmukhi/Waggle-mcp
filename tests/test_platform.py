@@ -628,6 +628,9 @@ def test_http_identity_provider_routes_require_plus(tmp_path: Path) -> None:
         assert provider.status_code == 501
         assert provider.json()["error"] == "plus_required"
         assert provider.json()["contract"]["identity_provider"]["factory"] == "build_identity_provider"
+        assert provider.json()["contract"]["identity_provider"]["reserved_routes"][2]["path"] == "/api/admin/identity/callback"
+        assert provider.json()["contract"]["identity_provider"]["reserved_routes"][3]["path"] == "/api/admin/identity/roles/resolve"
+        assert provider.json()["contract"]["identity_provider"]["reserved_routes"][4]["path"] == "/api/admin/identity/permissions/check"
 
 
 def test_http_identity_provider_routes_use_plus_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -641,6 +644,48 @@ def test_http_identity_provider_routes_use_plus_provider(tmp_path: Path, monkeyp
 
         def authorize_url(self, *, redirect_uri: str, state: str) -> str:
             return f"https://id.example.com/authorize?redirect_uri={redirect_uri}&state={state}"
+
+        def exchange_code(self, *, code: str, redirect_uri: str, state: str) -> dict[str, object]:
+            return {
+                "subject": "user_123",
+                "issuer": "https://id.example.com",
+                "email": "admin@example.com",
+                "display_name": "Admin User",
+                "roles": ["Owner", "Admin"],
+                "expires_at": "2026-05-06T12:30:00Z",
+                "code_seen": code,
+                "redirect_uri_seen": redirect_uri,
+                "state_seen": state,
+            }
+
+        def map_roles(self, *, session: dict[str, object]) -> dict[str, object]:
+            source_roles = list(session.get("roles", []))
+            primary_role = "Admin" if "Admin" in source_roles else "Viewer"
+            return {
+                "primary_role": primary_role,
+                "roles": source_roles,
+                "permissions": ["read:data", "write:data"] if primary_role == "Admin" else ["read:data"],
+                "source_claims": {"roles": source_roles},
+            }
+
+        def check_permission(
+            self,
+            *,
+            resolved: dict[str, object],
+            permission: str,
+            resource_type: str = "",
+            resource_id: str = "",
+        ) -> dict[str, object]:
+            permissions = list(resolved.get("permissions", []))
+            allowed = permission in permissions
+            return {
+                "allowed": allowed,
+                "reason": "matched_permission" if allowed else "permission_missing",
+                "matched_roles": list(resolved.get("roles", [])),
+                "matched_permissions": [permission] if allowed else [],
+                "resource_type_seen": resource_type,
+                "resource_id_seen": resource_id,
+            }
 
     fake_plus = ModuleType("waggle_plus")
     fake_plus.__version__ = "2.0.0"
@@ -666,5 +711,38 @@ def test_http_identity_provider_routes_use_plus_provider(tmp_path: Path, monkeyp
             assert authorize.status_code == 200
             assert "state=state-123" in authorize.json()["authorize_url"]
             assert authorize.json()["contract"]["capabilities"]["identity"] == ["oidc_sso"]
+
+            callback = client.post(
+                "/api/admin/identity/callback",
+                json={
+                    "code": "oidc-code-123",
+                    "redirect_uri": "https://waggle.example.com/callback",
+                    "state": "state-123",
+                },
+            )
+            assert callback.status_code == 200
+            assert callback.json()["session"]["subject"] == "user_123"
+            assert callback.json()["session"]["code_seen"] == "oidc-code-123"
+
+            resolved = client.post(
+                "/api/admin/identity/roles/resolve",
+                json={"session": callback.json()["session"]},
+            )
+            assert resolved.status_code == 200
+            assert resolved.json()["resolved"]["primary_role"] == "Admin"
+            assert resolved.json()["resolved"]["permissions"] == ["read:data", "write:data"]
+
+            decision = client.post(
+                "/api/admin/identity/permissions/check",
+                json={
+                    "resolved": resolved.json()["resolved"],
+                    "permission": "write:data",
+                    "resource_type": "tenant",
+                    "resource_id": "workspace-a",
+                },
+            )
+            assert decision.status_code == 200
+            assert decision.json()["decision"]["allowed"] is True
+            assert decision.json()["decision"]["resource_type_seen"] == "tenant"
     finally:
         sys.modules.pop("waggle_plus", None)

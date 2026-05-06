@@ -403,6 +403,9 @@ HTTP admin endpoints are also available in the self-hosted app surface:
 - `GET /api/admin/audit-events`
 - `GET /api/admin/identity/provider`
 - `POST /api/admin/identity/authorize`
+- `POST /api/admin/identity/callback`
+- `POST /api/admin/identity/roles/resolve`
+- `POST /api/admin/identity/permissions/check`
 
 If `X-API-Key` is provided, the request is scoped to that key's tenant. Otherwise the endpoints use `tenant_id` from the query string or body and fall back to the configured default tenant.
 The identity endpoints are reserved for `Waggle Plus`. Core intentionally returns `501` with a `plus_required` payload until a private Plus module advertising the `oidc_sso` capability is installed.
