@@ -4,8 +4,10 @@ import sys
 import re
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[2]
+
 # Ensure src is in the python path
-sys.path.insert(0, os.path.abspath("src"))
+sys.path.insert(0, str(ROOT / "src"))
 
 from waggle.graph import MemoryGraph
 from waggle.oolong_benchmark import load_oolong_examples, _index_context_window, answers_match
@@ -67,12 +69,12 @@ def extract_pairs_from_chunks(chunks):
     return " | ".join(pairs)
 
 def main():
-    dataset_path = "benchmarks/data/oolong_synthetic_20.jsonl"
-    db_path = "benchmarks/data/test_oolong.db"
+    dataset_path = ROOT / "benchmarks/data/oolong_synthetic_20.jsonl"
+    db_path = ROOT / "benchmarks/data/test_oolong.db"
     
     # Reset DB
-    if os.path.exists(db_path):
-        os.remove(db_path)
+    if db_path.exists():
+        db_path.unlink()
         
     # We use a dummy embedding model since we use aggregate
     class DummyEmbeddingModel:

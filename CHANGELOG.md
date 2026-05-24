@@ -5,7 +5,7 @@
 ### Added
 
 - Added Apache-2.0 licensing for Waggle Core via `LICENSE`.
-- Added `COMMERCIAL.md` to clarify the public Core vs future paid Plus split.
+- Added `docs/commercial.md` to clarify the public Core vs future paid Plus split.
 - Updated README positioning to present this repository as public Waggle Core
   and Waggle Plus as coming soon.
 

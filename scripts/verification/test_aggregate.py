@@ -1,8 +1,11 @@
 import os
 import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
 
 # Ensure src is in the python path
-sys.path.insert(0, os.path.abspath("src"))
+sys.path.insert(0, str(ROOT / "src"))
 
 from waggle.graph import MemoryGraph
 

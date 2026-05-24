@@ -14,7 +14,8 @@ import tempfile
 from pathlib import Path
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
 
 from waggle.graph import MemoryGraph
 from waggle.models import NodeType, RelationType

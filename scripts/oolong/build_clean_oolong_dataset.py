@@ -9,9 +9,11 @@ Fixes:
 import json
 import re
 from collections import defaultdict
+from pathlib import Path
 from datasets import load_dataset
 
-OUT_PATH = "benchmarks/data/oolong_real_clean_30.jsonl"
+ROOT = Path(__file__).resolve().parents[2]
+OUT_PATH = ROOT / "benchmarks/data/oolong_real_clean_30.jsonl"
 TARGET_PER_GROUP = 15   # 15 user + 15 counting = 30 total
 MAX_CTX_WORDS   = 2000  # keep context manageable
 
@@ -88,7 +90,7 @@ def main():
         row["example_id"] = f"clean-{i}"
         out.append(row)
 
-    with open(OUT_PATH, "w") as f:
+    with OUT_PATH.open("w") as f:
         for row in out:
             f.write(json.dumps(row) + "\n")
 

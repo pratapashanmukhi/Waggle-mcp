@@ -7,7 +7,7 @@ Compares three retrieval/answering modes:
   C) aggregate (max_nodes=1000) + LLM answerer (optional; skipped if not available)
 
 Run:
-    PYTHONPATH=src .venv/bin/python3 run_e2e_eval.py
+    PYTHONPATH=src .venv/bin/python3 scripts/oolong/run_e2e_eval.py
 """
 import ast
 import json
@@ -19,7 +19,8 @@ from dataclasses import dataclass, field
 from itertools import combinations
 from pathlib import Path
 
-sys.path.insert(0, os.path.abspath("src"))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
 
 from waggle.graph import MemoryGraph
 from waggle.oolong_benchmark import load_oolong_examples, _index_context_window
@@ -379,8 +380,8 @@ def print_mode(report: ModeReport):
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    DATASET = "benchmarks/data/oolong_synthetic_20.jsonl"
-    DB = "benchmarks/data/e2e_eval.db"
+    DATASET = ROOT / "benchmarks/data/oolong_synthetic_20.jsonl"
+    DB = ROOT / "benchmarks/data/e2e_eval.db"
 
     print("\n🔧 Building graph (indexing all 20 cases)...")
     t0 = time.time()
@@ -438,7 +439,7 @@ def main():
                 for c in r.cases
             ],
         })
-    out_path = Path("benchmarks/data/e2e_eval_report.json")
+    out_path = ROOT / "benchmarks/data/e2e_eval_report.json"
     out_path.write_text(json.dumps(out, indent=2))
     print(f"\n  📄 Full JSON report saved → {out_path}\n")
 

@@ -16,7 +16,7 @@ RLM Baseline (from paper arXiv:2511.02817):
   Full-context frontier models at 128K: <50% on both splits
 
 Run:
-    PYTHONPATH=src GROQ_API_KEY=gsk_... .venv/bin/python3 run_oolong_llm_eval.py
+    PYTHONPATH=src GROQ_API_KEY=gsk_... .venv/bin/python3 scripts/oolong/run_oolong_llm_eval.py
 """
 import ast
 import json
@@ -28,7 +28,8 @@ from dataclasses import dataclass, field
 from itertools import combinations
 from pathlib import Path
 
-sys.path.insert(0, os.path.abspath("src"))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
 
 import groq
 import numpy as np
@@ -42,10 +43,10 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL_PAIRS = "llama-3.1-8b-instant"   # fast + low TPM
 GROQ_MODEL_SYNTH = "llama-3.1-8b-instant"   # same model, consistent comparison
 
-PAIRS_DATASET  = "benchmarks/data/oolong_synthetic_20.jsonl"
-REAL_DATASET   = "benchmarks/data/oolong_real_clean_30.jsonl"  # clean: 1 CW per example, no preamble
+PAIRS_DATASET  = ROOT / "benchmarks/data/oolong_synthetic_20.jsonl"
+REAL_DATASET   = ROOT / "benchmarks/data/oolong_real_clean_30.jsonl"  # clean: 1 CW per example, no preamble
 
-DB_PATH = "benchmarks/data/llm_eval.db"
+DB_PATH = ROOT / "benchmarks/data/llm_eval.db"
 
 # RLM paper reported numbers (arXiv:2511.02817, Table 2 / Figure 3)
 # GPT-4o-mini on oolong-synth small context window subset ≈ 38–42%
@@ -474,7 +475,7 @@ def main():
         "mode1": {"summary": s1_all, "cases": [vars(c) for c in mode1.cases]},
         "mode2": {"summary": s2_all, "cases": [vars(c) for c in mode2.cases]},
     }
-    out_path = Path("benchmarks/data/llm_eval_report.json")
+    out_path = ROOT / "benchmarks/data/llm_eval_report.json"
     out_path.write_text(json.dumps(out, indent=2))
     print(f"\n  📄 Full JSON saved → {out_path}\n")
 

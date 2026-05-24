@@ -4,6 +4,8 @@ import uuid
 from itertools import combinations
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[2]
+
 # Categories
 CATEGORIES = [
     "description and abstract concept",
@@ -113,7 +115,7 @@ def generate_case(num_users=5, num_examples=40):
     }
 
 def main():
-    output_path = Path("benchmarks/data/oolong_synthetic_20.jsonl")
+    output_path = ROOT / "benchmarks/data/oolong_synthetic_20.jsonl"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
     print(f"Generating 20 cases for OOLONG-Pairs...")

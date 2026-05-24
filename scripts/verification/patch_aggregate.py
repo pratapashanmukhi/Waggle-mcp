@@ -1,9 +1,12 @@
 import os
 import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
 
 def patch_graph_py():
-    path = "src/waggle/graph.py"
-    with open(path, "r") as f:
+    path = ROOT / "src/waggle/graph.py"
+    with path.open("r") as f:
         content = f.read()
 
     aggregate_code = """
@@ -139,15 +142,15 @@ def patch_graph_py():
     
     if "def aggregate(" not in content:
         content = content.replace("    def tiered_query(", aggregate_code)
-        with open(path, "w") as f:
+        with path.open("w") as f:
             f.write(content)
         print("Patched graph.py")
     else:
         print("graph.py already patched")
 
 def patch_neo4j_graph_py():
-    path = "src/waggle/neo4j_graph.py"
-    with open(path, "r") as f:
+    path = ROOT / "src/waggle/neo4j_graph.py"
+    with path.open("r") as f:
         content = f.read()
 
     aggregate_code = """
@@ -247,7 +250,7 @@ def patch_neo4j_graph_py():
 """
     if "def aggregate(" not in content:
         content = content.replace("    def query(", aggregate_code)
-        with open(path, "w") as f:
+        with path.open("w") as f:
             f.write(content)
         print("Patched neo4j_graph.py")
     else:
@@ -255,8 +258,8 @@ def patch_neo4j_graph_py():
 
 
 def patch_server_py():
-    path = "src/waggle/server.py"
-    with open(path, "r") as f:
+    path = ROOT / "src/waggle/server.py"
+    with path.open("r") as f:
         content = f.read()
 
     tool_def = """
@@ -322,7 +325,7 @@ def patch_server_py():
     if "name == \"aggregate_graph\"" not in content:
         content = content.replace("        if name == \"query_graph\":", tool_asserts)
 
-    with open(path, "w") as f:
+    with path.open("w") as f:
         f.write(content)
     print("Patched server.py")
 

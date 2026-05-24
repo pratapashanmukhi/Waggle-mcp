@@ -11,14 +11,15 @@ import json
 from collections import Counter
 from pathlib import Path
 
-REAL_DATASET  = "benchmarks/data/oolong_real_30.jsonl"
-REPORT_JSON   = "benchmarks/data/llm_eval_report.json"
+ROOT = Path(__file__).resolve().parents[2]
+REAL_DATASET  = ROOT / "benchmarks/data/oolong_real_30.jsonl"
+REPORT_JSON   = ROOT / "benchmarks/data/llm_eval_report.json"
 
 # ---------------------------------------------------------------------------
 # Load data
 # ---------------------------------------------------------------------------
 examples = []
-with open(REAL_DATASET) as f:
+with REAL_DATASET.open() as f:
     for line in f:
         examples.append(json.loads(line))
 

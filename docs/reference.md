@@ -132,7 +132,7 @@ env     = {
 }
 ```
 
-A pre-filled example is in [codex_config.example.toml](../codex_config.example.toml).
+A pre-filled example is in [examples/codex_config.example.toml](../examples/codex_config.example.toml).
 
 ### Gemini CLI
 
