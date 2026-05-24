@@ -158,9 +158,7 @@ class LocalREPL(NonIsolatedEnv):
         # Custom tools: functions available in the REPL
         self.custom_tools = custom_tools or {}
         # Sub-tools: inherited from custom_tools if not specified
-        self.custom_sub_tools = (
-            custom_sub_tools if custom_sub_tools is not None else self.custom_tools
-        )
+        self.custom_sub_tools = custom_sub_tools if custom_sub_tools is not None else self.custom_tools
 
         # Validate custom tools don't override reserved names
         validate_custom_tools(self.custom_tools)
@@ -284,9 +282,7 @@ class LocalREPL(NonIsolatedEnv):
         if not self.lm_handler_address:
             return ["Error: No LM handler configured"] * len(prompts)
         try:
-            responses = send_lm_request_batched(
-                self.lm_handler_address, prompts, model=model, depth=self.depth
-            )
+            responses = send_lm_request_batched(self.lm_handler_address, prompts, model=model, depth=self.depth)
 
             results = []
             for response in responses:
@@ -369,9 +365,7 @@ class LocalREPL(NonIsolatedEnv):
                     results[index] = f"Error: RLM query failed - {e}"
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [
-                    executor.submit(_run_subcall, i, prompt) for i, prompt in enumerate(prompts)
-                ]
+                futures = [executor.submit(_run_subcall, i, prompt) for i, prompt in enumerate(prompts)]
                 # Wait for all futures to complete; exceptions are captured inside _run_subcall
                 for future in as_completed(futures):
                     future.result()  # Re-raises unexpected executor errors
@@ -390,9 +384,7 @@ class LocalREPL(NonIsolatedEnv):
         """Load context into the environment as context_0 (and 'context' alias)."""
         self.add_context(context_payload, 0)
 
-    def add_context(
-        self, context_payload: dict | list | str, context_index: int | None = None
-    ) -> int:
+    def add_context(self, context_payload: dict | list | str, context_index: int | None = None) -> int:
         """
         Add a context with versioned variable name.
 
@@ -417,9 +409,7 @@ class LocalREPL(NonIsolatedEnv):
             context_path = os.path.join(self.temp_dir, f"context_{context_index}.json")
             with open(context_path, "w") as f:
                 json.dump(context_payload, f)
-            self.execute_code(
-                f"import json\nwith open(r'{context_path}', 'r') as f:\n    {var_name} = json.load(f)"
-            )
+            self.execute_code(f"import json\nwith open(r'{context_path}', 'r') as f:\n    {var_name} = json.load(f)")
 
         # Alias context_0 as 'context' for backward compatibility
         if context_index == 0:
@@ -436,9 +426,7 @@ class LocalREPL(NonIsolatedEnv):
         """Return the number of contexts loaded."""
         return self._context_count
 
-    def add_history(
-        self, message_history: list[dict[str, Any]], history_index: int | None = None
-    ) -> int:
+    def add_history(self, message_history: list[dict[str, Any]], history_index: int | None = None) -> int:
         """
         Store a conversation's message history as a versioned variable.
 

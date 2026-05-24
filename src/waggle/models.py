@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
@@ -13,14 +13,14 @@ from waggle.errors import AuthorizationError
 
 def utc_now() -> datetime:
     """Return a timezone-aware UTC timestamp."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def default_api_key_scopes() -> list[str]:
     return ["graph:read", "graph:write", "admin:read", "admin:write"]
 
 
-class NodeType(str, Enum):
+class NodeType(StrEnum):
     FACT = "fact"
     ENTITY = "entity"
     CONCEPT = "concept"
@@ -30,7 +30,7 @@ class NodeType(str, Enum):
     NOTE = "note"
 
 
-class RelationType(str, Enum):
+class RelationType(StrEnum):
     RELATES_TO = "relates_to"
     CONTRADICTS = "contradicts"
     DEPENDS_ON = "depends_on"
@@ -68,7 +68,7 @@ class Node(BaseModel):
     embedding_dim: int = 0
     source_turn_pair_id: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
-    evidence_records: list["EvidenceRecord"] = Field(default_factory=list)
+    evidence_records: list[EvidenceRecord] = Field(default_factory=list)
     valid_from: datetime | None = None
     valid_to: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
@@ -251,9 +251,9 @@ class BackfillStats(BaseModel):
 class SubgraphResult(BaseModel):
     nodes: list[Node] = Field(default_factory=list)
     edges: list[Edge] = Field(default_factory=list)
-    replay_hits: list["ReplayHit"] = Field(default_factory=list)
-    fusion_hits: list["FusionHit"] = Field(default_factory=list)
-    hybrid_hits: list["HybridHit"] = Field(default_factory=list)
+    replay_hits: list[ReplayHit] = Field(default_factory=list)
+    fusion_hits: list[FusionHit] = Field(default_factory=list)
+    hybrid_hits: list[HybridHit] = Field(default_factory=list)
     retrieval_mode: str = "graph"
     query: str = ""
     total_nodes_in_graph: int = 0
@@ -414,7 +414,7 @@ class AbhiMergeResult(BaseModel):
     encryption_algorithm: str = ""
     executed_actions: list[str] = Field(default_factory=list)
     # new fields
-    conflict_records: list["MergeConflictRecord"] = Field(default_factory=list)
+    conflict_records: list[MergeConflictRecord] = Field(default_factory=list)
     dry_run: bool = False
     hash_verified: bool = False
     dangling_edges_dropped: list[str] = Field(default_factory=list)
@@ -523,7 +523,7 @@ class ContextTimelineItem(BaseModel):
 
 class TimelineResult(BaseModel):
     scope: str = ""
-    items: list["ContextTimelineItem"] = Field(default_factory=list)
+    items: list[ContextTimelineItem] = Field(default_factory=list)
 
 
 class ConflictEntry(BaseModel):
@@ -566,7 +566,7 @@ class ContextBundle(BaseModel):
     summary: str = ""
     nodes: list[Node] = Field(default_factory=list)
     edges: list[Edge] = Field(default_factory=list)
-    replay_hits: list["ReplayHit"] = Field(default_factory=list)
+    replay_hits: list[ReplayHit] = Field(default_factory=list)
     timeline: list[ContextTimelineItem] = Field(default_factory=list)
     stats: GraphStats = Field(default_factory=GraphStats)
     render_hints: ContextRenderHints = Field(default_factory=ContextRenderHints)
@@ -728,7 +728,9 @@ class TranscriptRecord(BaseModel):
     turn_pair_id: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("agent_id", "project", "session_id", "role", "embedding_model_id", "content_hash", "turn_pair_id", mode="before")
+    @field_validator(
+        "agent_id", "project", "session_id", "role", "embedding_model_id", "content_hash", "turn_pair_id", mode="before"
+    )
     @classmethod
     def _normalize_scope_fields(cls, value: Any) -> str:
         if value is None:
@@ -797,17 +799,15 @@ class TranscriptMessage(BaseModel):
 
     role: str
     content: str
-    timestamp: Optional[str] = None
-    message_id: Optional[str] = None
+    timestamp: str | None = None
+    message_id: str | None = None
 
     @field_validator("role", mode="before")
     @classmethod
     def _validate_role(cls, value: Any) -> str:
         text = str(value).strip().lower()
         if text not in ALLOWED_TRANSCRIPT_ROLES:
-            raise ValueError(
-                f"Unsupported role '{value}'. Allowed roles: {sorted(ALLOWED_TRANSCRIPT_ROLES)}"
-            )
+            raise ValueError(f"Unsupported role '{value}'. Allowed roles: {sorted(ALLOWED_TRANSCRIPT_ROLES)}")
         return text
 
     @field_validator("content", mode="before")
@@ -822,7 +822,7 @@ class TranscriptMessage(BaseModel):
 
     @field_validator("message_id", "timestamp", mode="before")
     @classmethod
-    def _normalize_optional_str(cls, value: Any) -> Optional[str]:
+    def _normalize_optional_str(cls, value: Any) -> str | None:
         if value is None:
             return None
         stripped = str(value).strip()
@@ -865,11 +865,11 @@ class TranscriptIngestionResult(BaseModel):
     # Export metadata
     export_skipped: bool = False
     export_skipped_reason: str = ""
-    markdown_path: Optional[str] = None
-    json_path: Optional[str] = None
+    markdown_path: str | None = None
+    json_path: str | None = None
     export_node_count: int = 0
     export_edge_count: int = 0
-    checkpoint_path: Optional[str] = None
+    checkpoint_path: str | None = None
     checkpoint_scope: str = ""
 
 
@@ -892,15 +892,15 @@ class ClearScopeResult(BaseModel):
 
 
 class FieldDelta(BaseModel):
-    field: str                  # e.g. "content", "tags", "metadata.source_app"
-    old_value: Any              # None when the object was added
-    new_value: Any              # None when the object was removed
+    field: str  # e.g. "content", "tags", "metadata.source_app"
+    old_value: Any  # None when the object was added
+    new_value: Any  # None when the object was removed
 
 
 class NodeDiffRecord(BaseModel):
     node_id: str
     classification: Literal["added", "removed", "modified", "identical"]
-    label: str = ""             # label or content[:60] for display
+    label: str = ""  # label or content[:60] for display
     deltas: list[FieldDelta] = Field(default_factory=list)
 
 
@@ -912,20 +912,20 @@ class EdgeDiffRecord(BaseModel):
 
 class MergeConflictRecord(BaseModel):
     conflict_id: str = Field(default_factory=lambda: str(uuid4()))
-    object_id: str              # node or edge ID
+    object_id: str  # node or edge ID
     object_type: Literal["node", "edge"]
-    field: str                  # e.g. "content", "tags"
-    base_value: Any             # value in the base document (None if absent)
-    left_value: Any             # value in the left document
-    right_value: Any            # value in the right document
-    resolved_by: str = ""       # set after resolution
+    field: str  # e.g. "content", "tags"
+    base_value: Any  # value in the base document (None if absent)
+    left_value: Any  # value in the left document
+    right_value: Any  # value in the right document
+    resolved_by: str = ""  # set after resolution
     resolved_value: Any = None  # the value selected after resolution
 
 
 class FieldLevelDiffResult(BaseModel):
     input_path_a: str
     input_path_b: str
-    input_path_base: str = ""           # empty string for two-way diff
+    input_path_base: str = ""  # empty string for two-way diff
     abhi_spec_version_a: str = ""
     abhi_spec_version_b: str = ""
     diff_mode: Literal["two_way", "three_way"] = "two_way"
@@ -953,12 +953,12 @@ class FieldLevelDiffResult(BaseModel):
 
 
 class MergeStrategyFieldOverride(BaseModel):
-    field: str                  # e.g. "tags", "metadata.source_app"
-    strategy: str               # "prefer_left" | "prefer_right" | "last_write_wins" | "contradict"
+    field: str  # e.g. "tags", "metadata.source_app"
+    strategy: str  # "prefer_left" | "prefer_right" | "last_write_wins" | "contradict"
 
 
 class MergeStrategyTypeOverride(BaseModel):
-    node_type: str              # e.g. "decision", "fact"
+    node_type: str  # e.g. "decision", "fact"
     strategy: str
 
 
@@ -968,12 +968,13 @@ class MergeStrategyConfig(BaseModel):
     type_overrides: list[MergeStrategyTypeOverride] = Field(default_factory=list)
 
     @classmethod
-    def load(cls, path: str | Path | None = None) -> "MergeStrategyConfig":
+    def load(cls, path: str | Path | None = None) -> MergeStrategyConfig:
         """
         Load from path, or from ~/.waggle/merge-strategies.yaml if path is None.
         Returns a default config if the file does not exist.
         """
         import os
+
         if path is None:
             config_path = Path(os.path.expanduser("~/.waggle/merge-strategies.yaml"))
         else:
@@ -982,6 +983,7 @@ class MergeStrategyConfig(BaseModel):
             return cls()
         try:
             import yaml  # type: ignore[import]
+
             data = yaml.safe_load(config_path.read_text())
             if isinstance(data, dict):
                 return cls(**data)

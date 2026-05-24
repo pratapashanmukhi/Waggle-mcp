@@ -15,14 +15,14 @@ class RuntimeContext:
     tool_name: str = ""
 
 
-_runtime_context: contextvars.ContextVar[RuntimeContext] = contextvars.ContextVar(
+_runtime_context: contextvars.ContextVar[RuntimeContext | None] = contextvars.ContextVar(
     "waggle_runtime_context",
-    default=RuntimeContext(),
+    default=None,
 )
 
 
 def get_runtime_context() -> RuntimeContext:
-    return _runtime_context.get()
+    return _runtime_context.get() or RuntimeContext()
 
 
 @contextmanager

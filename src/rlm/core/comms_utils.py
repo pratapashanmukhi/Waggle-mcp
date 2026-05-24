@@ -256,9 +256,6 @@ def send_lm_request_batched(
             return [LMResponse.error_response("No completions returned")] * len(prompts)
 
         # Convert batched response to list of individual responses
-        return [
-            LMResponse.success_response(chat_completion)
-            for chat_completion in response.chat_completions
-        ]
+        return [LMResponse.success_response(chat_completion) for chat_completion in response.chat_completions]
     except Exception as e:
         return [LMResponse.error_response(f"Request failed: {e}")] * len(prompts)

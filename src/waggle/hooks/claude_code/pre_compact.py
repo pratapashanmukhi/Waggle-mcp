@@ -9,6 +9,7 @@ Protocol: reads JSON from stdin, writes JSON to stdout.
 Always exits 0 — never blocks the user's session.
 Timeout: 5 seconds.
 """
+
 from __future__ import annotations
 
 import json
@@ -30,7 +31,7 @@ for _candidate in [
 _TIMEOUT_SECONDS = 5
 
 
-def _timeout_handler(signum: int, frame: Any) -> None:  # noqa: ANN001
+def _timeout_handler(signum: int, frame: Any) -> None:
     raise TimeoutError("Waggle pre_compact hook timed out")
 
 

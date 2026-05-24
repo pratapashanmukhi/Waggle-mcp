@@ -82,15 +82,11 @@ class OpenAIClient(BaseLM):
         if self.client.base_url == DEFAULT_PRIME_INTELLECT_BASE_URL:
             extra_body["usage"] = {"include": True}
 
-        response = self.client.chat.completions.create(
-            model=model, messages=messages, extra_body=extra_body
-        )
+        response = self.client.chat.completions.create(model=model, messages=messages, extra_body=extra_body)
         self._track_cost(response, model)
         return response.choices[0].message.content
 
-    async def acompletion(
-        self, prompt: str | list[dict[str, Any]], model: str | None = None
-    ) -> str:
+    async def acompletion(self, prompt: str | list[dict[str, Any]], model: str | None = None) -> str:
         if isinstance(prompt, str):
             messages = [{"role": "user", "content": prompt}]
         elif isinstance(prompt, list) and all(isinstance(item, dict) for item in prompt):

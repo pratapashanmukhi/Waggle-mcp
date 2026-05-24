@@ -11,9 +11,8 @@ Covers:
 
 from __future__ import annotations
 
-import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -22,12 +21,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from waggle.graph import MemoryGraph
-from waggle.models import NodeType, RelationType
-
+from waggle.models import NodeType
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class FakeEmbeddingModel:
     model_name = "fake-model"
@@ -62,23 +61,24 @@ def make_graph(tmp_path: Path) -> MemoryGraph:
 def utc(dt: datetime) -> datetime:
     """Ensure *dt* is UTC-aware."""
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
-NOW = datetime.now(timezone.utc)
-T0 = NOW - timedelta(hours=3)   # 3 h ago  — "created"
-T1 = NOW - timedelta(hours=1)   # 1 h ago  — "expired"
-T2 = NOW + timedelta(hours=1)   # 1 h from now — "future"
+NOW = datetime.now(UTC)
+T0 = NOW - timedelta(hours=3)  # 3 h ago  — "created"
+T1 = NOW - timedelta(hours=1)  # 1 h ago  — "expired"
+T2 = NOW + timedelta(hours=1)  # 1 h from now — "future"
 
 
 # ---------------------------------------------------------------------------
 # 1. Default query excludes expired nodes
 # ---------------------------------------------------------------------------
+
 
 def test_default_query_excludes_expired_node(tmp_path: Path) -> None:
     """Node with valid_to in the past must NOT appear in default query results."""
@@ -97,9 +97,7 @@ def test_default_query_excludes_expired_node(tmp_path: Path) -> None:
     # Default query — include_invalidated defaults to False
     subgraph = graph.query(query="expired fact", retrieval_mode="graph")
     returned_ids = {n.id for n in subgraph.nodes}
-    assert expired_id not in returned_ids, (
-        "Expired node should be excluded from default query results"
-    )
+    assert expired_id not in returned_ids, "Expired node should be excluded from default query results"
 
 
 def test_default_aggregate_excludes_expired_node(tmp_path: Path) -> None:
@@ -117,14 +115,13 @@ def test_default_aggregate_excludes_expired_node(tmp_path: Path) -> None:
 
     subgraph = graph.aggregate(query="dark mode preference")
     returned_ids = {n.id for n in subgraph.nodes}
-    assert expired_id not in returned_ids, (
-        "Expired node should be excluded from default aggregate results"
-    )
+    assert expired_id not in returned_ids, "Expired node should be excluded from default aggregate results"
 
 
 # ---------------------------------------------------------------------------
 # 2. include_invalidated=True returns expired nodes
 # ---------------------------------------------------------------------------
+
 
 def test_include_invalidated_returns_expired_node(tmp_path: Path) -> None:
     """include_invalidated=True must return nodes whose valid_to has passed."""
@@ -145,9 +142,7 @@ def test_include_invalidated_returns_expired_node(tmp_path: Path) -> None:
         include_invalidated=True,
     )
     returned_ids = {n.id for n in subgraph.nodes}
-    assert expired_id in returned_ids, (
-        "include_invalidated=True must return expired nodes"
-    )
+    assert expired_id in returned_ids, "include_invalidated=True must return expired nodes"
 
 
 def test_include_invalidated_aggregate_returns_expired_node(tmp_path: Path) -> None:
@@ -168,14 +163,13 @@ def test_include_invalidated_aggregate_returns_expired_node(tmp_path: Path) -> N
         include_invalidated=True,
     )
     returned_ids = {n.id for n in subgraph.nodes}
-    assert expired_id in returned_ids, (
-        "aggregate(include_invalidated=True) must return expired nodes"
-    )
+    assert expired_id in returned_ids, "aggregate(include_invalidated=True) must return expired nodes"
 
 
 # ---------------------------------------------------------------------------
 # 3. as_of returns nodes valid at that point in time
 # ---------------------------------------------------------------------------
+
 
 def test_as_of_returns_node_valid_at_that_time(tmp_path: Path) -> None:
     """as_of=T0+30min should return a node valid between T0 and T1."""
@@ -199,9 +193,7 @@ def test_as_of_returns_node_valid_at_that_time(tmp_path: Path) -> None:
         as_of=as_of_time,
     )
     returned_ids = {n.id for n in subgraph.nodes}
-    assert expired_id in returned_ids, (
-        "as_of within the validity window must return the node"
-    )
+    assert expired_id in returned_ids, "as_of within the validity window must return the node"
 
 
 def test_as_of_excludes_node_not_yet_valid(tmp_path: Path) -> None:
@@ -224,9 +216,7 @@ def test_as_of_excludes_node_not_yet_valid(tmp_path: Path) -> None:
         as_of=NOW,
     )
     returned_ids = {n.id for n in subgraph.nodes}
-    assert future_id not in returned_ids, (
-        "as_of before valid_from must exclude the node"
-    )
+    assert future_id not in returned_ids, "as_of before valid_from must exclude the node"
 
 
 def test_as_of_aggregate_returns_node_valid_at_that_time(tmp_path: Path) -> None:
@@ -249,14 +239,13 @@ def test_as_of_aggregate_returns_node_valid_at_that_time(tmp_path: Path) -> None
         as_of=as_of_time,
     )
     returned_ids = {n.id for n in subgraph.nodes}
-    assert expired_id in returned_ids, (
-        "aggregate(as_of=...) within validity window must return the node"
-    )
+    assert expired_id in returned_ids, "aggregate(as_of=...) within validity window must return the node"
 
 
 # ---------------------------------------------------------------------------
 # 4. resolve_conflict(winner=...) sets valid_to on the losing node only
 # ---------------------------------------------------------------------------
+
 
 def test_resolve_conflict_with_winner_sets_valid_to_on_loser(tmp_path: Path) -> None:
     """resolve_conflict(winner=A) must set valid_to on B, not on A."""
@@ -279,30 +268,24 @@ def test_resolve_conflict_with_winner_sets_valid_to_on_loser(tmp_path: Path) -> 
     assert len(conflicts.conflicts) >= 1
     conflict_edge = conflicts.conflicts[0].edge
 
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     graph.resolve_conflict(
         edge_id=conflict_edge.id,
         winner=node_a.id,
         resolution_note="REST wins",
     )
-    after = datetime.now(timezone.utc)
+    after = datetime.now(UTC)
 
     # Reload both nodes
     refreshed_a = graph.get_node(node_a.id)
     refreshed_b = graph.get_node(node_b.id)
 
     # Winner (A) must NOT have valid_to set
-    assert refreshed_a.valid_to is None, (
-        "Winning node must not have valid_to set"
-    )
+    assert refreshed_a.valid_to is None, "Winning node must not have valid_to set"
 
     # Loser (B) must have valid_to set to approximately now
-    assert refreshed_b.valid_to is not None, (
-        "Losing node must have valid_to set after resolve_conflict"
-    )
-    assert before <= refreshed_b.valid_to <= after, (
-        "Losing node's valid_to must be set to the time of resolution"
-    )
+    assert refreshed_b.valid_to is not None, "Losing node must have valid_to set after resolve_conflict"
+    assert before <= refreshed_b.valid_to <= after, "Losing node's valid_to must be set to the time of resolution"
 
 
 def test_resolve_conflict_loser_excluded_from_default_query(tmp_path: Path) -> None:
@@ -329,13 +312,9 @@ def test_resolve_conflict_loser_excluded_from_default_query(tmp_path: Path) -> N
     # Default query — B should be gone
     subgraph = graph.query(query="API preference", retrieval_mode="graph")
     returned_ids = {n.id for n in subgraph.nodes}
-    assert node_b.id not in returned_ids, (
-        "Losing node must be excluded from default queries after resolve_conflict"
-    )
+    assert node_b.id not in returned_ids, "Losing node must be excluded from default queries after resolve_conflict"
     # A should still be present
-    assert node_a.id in returned_ids, (
-        "Winning node must still appear in default queries"
-    )
+    assert node_a.id in returned_ids, "Winning node must still appear in default queries"
 
 
 def test_resolve_conflict_loser_visible_with_include_invalidated(tmp_path: Path) -> None:
@@ -365,14 +344,13 @@ def test_resolve_conflict_loser_visible_with_include_invalidated(tmp_path: Path)
         include_invalidated=True,
     )
     returned_ids = {n.id for n in subgraph.nodes}
-    assert node_b.id in returned_ids, (
-        "Losing node must be visible with include_invalidated=True"
-    )
+    assert node_b.id in returned_ids, "Losing node must be visible with include_invalidated=True"
 
 
 # ---------------------------------------------------------------------------
 # 5. resolve_conflict with invalid winner raises ValueError
 # ---------------------------------------------------------------------------
+
 
 def test_resolve_conflict_invalid_winner_raises(tmp_path: Path) -> None:
     """Passing a winner that is not an endpoint of the edge must raise ValueError."""
@@ -409,6 +387,7 @@ def test_resolve_conflict_invalid_winner_raises(tmp_path: Path) -> None:
 # 6. WAGGLE_ENFORCE_VALID_TO=false disables enforcement (legacy behaviour)
 # ---------------------------------------------------------------------------
 
+
 def test_enforcement_disabled_via_env_var_returns_expired_nodes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -433,9 +412,7 @@ def test_enforcement_disabled_via_env_var_returns_expired_nodes(
     )
 
 
-def test_enforcement_disabled_aggregate_returns_expired_nodes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_enforcement_disabled_aggregate_returns_expired_nodes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """With WAGGLE_ENFORCE_VALID_TO=false, aggregate also returns expired nodes."""
     monkeypatch.setenv("WAGGLE_ENFORCE_VALID_TO", "false")
 
@@ -452,14 +429,13 @@ def test_enforcement_disabled_aggregate_returns_expired_nodes(
 
     subgraph = graph.aggregate(query="dark mode preference")
     returned_ids = {n.id for n in subgraph.nodes}
-    assert expired_id in returned_ids, (
-        "With WAGGLE_ENFORCE_VALID_TO=false, aggregate must return expired nodes"
-    )
+    assert expired_id in returned_ids, "With WAGGLE_ENFORCE_VALID_TO=false, aggregate must return expired nodes"
 
 
 # ---------------------------------------------------------------------------
 # 7. Nodes without valid_to are always returned (no false exclusions)
 # ---------------------------------------------------------------------------
+
 
 def test_node_without_valid_to_always_returned(tmp_path: Path) -> None:
     """Nodes with valid_to=None must always appear in default queries."""
@@ -474,9 +450,7 @@ def test_node_without_valid_to_always_returned(tmp_path: Path) -> None:
 
     subgraph = graph.query(query="permanent fact", retrieval_mode="graph")
     returned_ids = {n.id for n in subgraph.nodes}
-    assert permanent_id in returned_ids, (
-        "Nodes without valid_to must always appear in default queries"
-    )
+    assert permanent_id in returned_ids, "Nodes without valid_to must always appear in default queries"
 
 
 def test_node_with_future_valid_to_returned_by_default(tmp_path: Path) -> None:
@@ -493,6 +467,4 @@ def test_node_with_future_valid_to_returned_by_default(tmp_path: Path) -> None:
 
     subgraph = graph.query(query="active fact", retrieval_mode="graph")
     returned_ids = {n.id for n in subgraph.nodes}
-    assert active_id in returned_ids, (
-        "Nodes with valid_to in the future must appear in default queries"
-    )
+    assert active_id in returned_ids, "Nodes with valid_to in the future must appear in default queries"

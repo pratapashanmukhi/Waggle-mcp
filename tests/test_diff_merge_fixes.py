@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import warnings
 from copy import deepcopy
 from typing import Any
@@ -12,12 +11,8 @@ import pytest
 
 from waggle.abhi import (
     _apply_merge_strategy,
-    _compute_edge_delta,
-    _compute_node_delta,
     diff_abhi_documents,
     validate_abhi_signature,
-    DIFFED_FIELDS,
-    EDGE_DIFFED_FIELDS,
 )
 from waggle.errors import ValidationFailure
 from waggle.models import (
@@ -27,10 +22,10 @@ from waggle.models import (
     MergeStrategyTypeOverride,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_node(**overrides: Any) -> dict[str, Any]:
     defaults = {
@@ -78,6 +73,7 @@ def _make_document(nodes: list[dict], edges: list[dict] | None = None) -> dict[s
 # Fix #1: validate_abhi_signature warns when using bundled key
 # ===========================================================================
 
+
 class TestSignatureValidation:
     def test_unsigned_raises(self):
         document = {"manifest": {"signatures": {"present": False}}}
@@ -88,8 +84,8 @@ class TestSignatureValidation:
         """When no trusted key path is given, a UserWarning must be emitted."""
         # We need a signed document for the warning path to be reached.
         # Since we don't have real keys here, we'll catch the warning first.
-        from cryptography.hazmat.primitives.asymmetric import ed25519 as _ed25519
         from cryptography.hazmat.primitives import serialization as _ser
+        from cryptography.hazmat.primitives.asymmetric import ed25519 as _ed25519
 
         private_key = _ed25519.Ed25519PrivateKey.generate()
         public_pem = private_key.public_key().public_bytes(
@@ -126,8 +122,8 @@ class TestSignatureValidation:
 
     def test_trusted_key_path_verifies(self, tmp_path):
         """Providing a trusted key path should not emit a warning."""
-        from cryptography.hazmat.primitives.asymmetric import ed25519 as _ed25519
         from cryptography.hazmat.primitives import serialization as _ser
+        from cryptography.hazmat.primitives.asymmetric import ed25519 as _ed25519
 
         private_key = _ed25519.Ed25519PrivateKey.generate()
         public_pem = private_key.public_key().public_bytes(
@@ -162,6 +158,7 @@ class TestSignatureValidation:
 # ===========================================================================
 # Fix #2: contradict edges for edge conflicts reference nodes, not edge IDs
 # ===========================================================================
+
 
 class TestContradictEdgeNotDangling:
     def test_node_conflict_uses_node_id(self):
@@ -231,6 +228,7 @@ class TestContradictEdgeNotDangling:
 # Fix #3: Three-way diff detects edge conflicts
 # ===========================================================================
 
+
 class TestThreeWayDiffEdgeConflicts:
     def test_two_way_diff_has_no_edge_conflicts(self):
         """Two-way diffs should never produce conflict_records (no base)."""
@@ -295,16 +293,14 @@ class TestThreeWayDiffEdgeConflicts:
 # Fix #4: field_overrides take precedence over type_overrides
 # ===========================================================================
 
+
 class TestStrategyOverridePrecedence:
     def test_field_override_wins_over_type_override(self):
         """A field-level override (more specific) must beat a type-level override (broad)."""
         node_id = "node-precedence"
-        base = _make_node(id=node_id, content="base", node_type="fact",
-                          tags=["base-tag"])
-        left = _make_node(id=node_id, content="left-content", node_type="fact",
-                          tags=["left-tag"])
-        right = _make_node(id=node_id, content="right-content", node_type="fact",
-                           tags=["right-tag"])
+        base = _make_node(id=node_id, content="base", node_type="fact", tags=["base-tag"])
+        left = _make_node(id=node_id, content="left-content", node_type="fact", tags=["left-tag"])
+        right = _make_node(id=node_id, content="right-content", node_type="fact", tags=["right-tag"])
 
         config = MergeStrategyConfig(
             default_strategy="prefer_right",

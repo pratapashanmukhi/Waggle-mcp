@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from waggle.models import (
     AbhiChunkLoadResult,
@@ -14,8 +14,8 @@ from waggle.models import (
     ContextBundleExportResult,
     GraphDiffResult,
     GraphStats,
-    NodeHistoryResult,
     Node,
+    NodeHistoryResult,
     ObservationResult,
     PrimeContextResult,
     SubgraphResult,
@@ -25,8 +25,8 @@ from waggle.models import (
 
 
 def _format_updated_ago(timestamp: datetime) -> str:
-    now = datetime.now(timezone.utc)
-    delta = max((now - timestamp.astimezone(timezone.utc)).total_seconds(), 0.0)
+    now = datetime.now(UTC)
+    delta = max((now - timestamp.astimezone(UTC)).total_seconds(), 0.0)
     if delta < 60:
         return "just now"
     if delta < 3600:
@@ -51,8 +51,8 @@ def serialize_subgraph(result: SubgraphResult) -> str:
         ]
         for hit in result.replay_hits:
             lines.append(
-                f'• (session: {hit.session_id or "n/a"}, turn: {hit.turn_index}, role: {hit.role or "unknown"}) '
-                f'{hit.transcript_snippet or hit.transcript_text} [score={hit.score:.3f}]'
+                f"• (session: {hit.session_id or 'n/a'}, turn: {hit.turn_index}, role: {hit.role or 'unknown'}) "
+                f"{hit.transcript_snippet or hit.transcript_text} [score={hit.score:.3f}]"
             )
         lines.extend(["", "=== End Results ==="])
         return "\n".join(lines)
@@ -104,9 +104,7 @@ def serialize_subgraph(result: SubgraphResult) -> str:
         for edge in result.edges:
             source_label = label_map.get(edge.source_id, edge.source_id[:8])
             target_label = label_map.get(edge.target_id, edge.target_id[:8])
-            lines.append(
-                f'• "{source_label}" --[{edge.relationship}]--> "{target_label}"'
-            )
+            lines.append(f'• "{source_label}" --[{edge.relationship}]--> "{target_label}"')
     else:
         lines.append("• No connecting relationships in this subgraph.")
 
@@ -114,15 +112,15 @@ def serialize_subgraph(result: SubgraphResult) -> str:
         lines.extend(["", "[REPLAY HITS]"])
         for hit in result.replay_hits[:10]:
             lines.append(
-                f'• (session: {hit.session_id or "n/a"}, turn: {hit.turn_index}, role: {hit.role or "unknown"}) '
-                f'{hit.transcript_snippet or hit.transcript_text} [score={hit.score:.3f}]'
+                f"• (session: {hit.session_id or 'n/a'}, turn: {hit.turn_index}, role: {hit.role or 'unknown'}) "
+                f"{hit.transcript_snippet or hit.transcript_text} [score={hit.score:.3f}]"
             )
     if result.fusion_hits:
         lines.extend(["", "[FUSION RANKING]"])
         for hit in result.fusion_hits[:10]:
             lines.append(
-                f'• #{hit.fused_rank} [{hit.source_lane}] {hit.content} '
-                f'(graph_rank={hit.graph_rank}, replay_rank={hit.replay_rank}, score={hit.score:.4f})'
+                f"• #{hit.fused_rank} [{hit.source_lane}] {hit.content} "
+                f"(graph_rank={hit.graph_rank}, replay_rank={hit.replay_rank}, score={hit.score:.4f})"
             )
 
     lines.extend(["", "=== End Results ==="])
@@ -285,9 +283,7 @@ def serialize_stats(stats: GraphStats) -> str:
     lines.extend(["", "[MOST CONNECTED]"])
     if stats.most_connected_nodes:
         for node in stats.most_connected_nodes:
-            lines.append(
-                f'• "{node.label}" ({node.node_type.value}) — {node.connection_count} connections'
-            )
+            lines.append(f'• "{node.label}" ({node.node_type.value}) — {node.connection_count} connections')
     else:
         lines.append("• No nodes stored yet.")
 
@@ -361,8 +357,7 @@ def serialize_node_history(result: NodeHistoryResult) -> str:
         lines.extend(["", "[EVIDENCE]"])
         for record in node.evidence_records[:5]:
             lines.append(
-                f'• ({record.source_role or "unknown"} turn {record.turn_index}) '
-                f'{record.source_text or node.content}'
+                f"• ({record.source_role or 'unknown'} turn {record.turn_index}) {record.source_text or node.content}"
             )
     lines.extend(["", "[RELATED NODES]"])
     if result.related_nodes:

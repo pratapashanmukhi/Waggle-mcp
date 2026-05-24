@@ -424,9 +424,7 @@ class DaytonaREPL(IsolatedEnv):
             **kwargs: Additional arguments passed to base class.
         """
         if persistent:
-            raise NotImplementedError(
-                "Persistent REPLs are currently not supported for environment: DaytonaREPL"
-            )
+            raise NotImplementedError("Persistent REPLs are currently not supported for environment: DaytonaREPL")
         super().__init__(persistent=persistent, depth=depth, **kwargs)
 
         self.api_key = api_key or os.getenv("DAYTONA_API_KEY")
@@ -442,9 +440,7 @@ class DaytonaREPL(IsolatedEnv):
 
         # Custom tools for the REPL environment
         self.custom_tools = custom_tools or {}
-        self.custom_sub_tools = (
-            custom_sub_tools if custom_sub_tools is not None else self.custom_tools
-        )
+        self.custom_sub_tools = custom_sub_tools if custom_sub_tools is not None else self.custom_tools
 
         # Validate custom tools don't override reserved names
         validate_custom_tools(self.custom_tools)
@@ -590,9 +586,7 @@ class DaytonaREPL(IsolatedEnv):
 
         elif req_type == "batched":
             prompts = req_data.get("prompts", [])
-            responses = send_lm_request_batched(
-                self.lm_handler_address, prompts, model=model, depth=self.depth
-            )
+            responses = send_lm_request_batched(self.lm_handler_address, prompts, model=model, depth=self.depth)
 
             results = []
             for resp in responses:
@@ -628,9 +622,7 @@ class DaytonaREPL(IsolatedEnv):
             self.pending_llm_calls.clear()
 
         # Build and execute the script
-        script = _build_exec_script(
-            code, self.BROKER_PORT, self.depth, custom_tools=self.custom_tools
-        )
+        script = _build_exec_script(code, self.BROKER_PORT, self.depth, custom_tools=self.custom_tools)
 
         # Upload the script as a temporary file
         script_path = "/tmp/rlm_exec_script.py"

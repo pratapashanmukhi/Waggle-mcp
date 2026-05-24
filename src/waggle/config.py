@@ -10,7 +10,7 @@ from waggle.retrieval.hybrid import HybridRetrievalConfig
 DEFAULT_DB_PATH = "~/.waggle/waggle.db"
 
 # Valid values for WAGGLE_STARTUP_MODE
-STARTUP_MODE_FAST = "fast"      # skip ML warmup; schema/inspection only
+STARTUP_MODE_FAST = "fast"  # skip ML warmup; schema/inspection only
 STARTUP_MODE_NORMAL = "normal"  # background warmup (default)
 STARTUP_MODE_STRICT = "strict"  # block until embeddings ready before serving
 
@@ -57,7 +57,7 @@ class AppConfig:
     dedup_threshold: float = 0.88
 
     @classmethod
-    def from_env(cls) -> "AppConfig":
+    def from_env(cls) -> AppConfig:
         # Render (and other PaaS providers) commonly inject a dynamic `PORT` env var.
         # Prefer `WAGGLE_HTTP_PORT` when set, otherwise fall back to `PORT`.
         resolved_http_port = os.environ.get("WAGGLE_HTTP_PORT") or os.environ.get("PORT") or "8080"
@@ -117,13 +117,10 @@ class AppConfig:
             )
         if self.startup_mode not in {STARTUP_MODE_FAST, STARTUP_MODE_NORMAL, STARTUP_MODE_STRICT}:
             raise ValidationFailure(
-                f"Unsupported WAGGLE_STARTUP_MODE: {self.startup_mode!r}. "
-                f"Valid values: fast, normal, strict."
+                f"Unsupported WAGGLE_STARTUP_MODE: {self.startup_mode!r}. Valid values: fast, normal, strict."
             )
         if self.dedup_threshold < 0.85:
-            raise ValidationFailure(
-                "WAGGLE_DEDUP_THRESHOLD must be >= 0.85 to avoid false-positive merges."
-            )
+            raise ValidationFailure("WAGGLE_DEDUP_THRESHOLD must be >= 0.85 to avoid false-positive merges.")
         if self.recency_half_life_days <= 0:
             raise ValidationFailure("WAGGLE_RECENCY_HALF_LIFE_DAYS must be greater than 0.")
         if self.tiered_retrieval_top_k_windows < 1:

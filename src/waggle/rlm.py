@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import dataclass
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
 import json
 import re
 import shlex
@@ -11,6 +7,12 @@ import subprocess
 import tempfile
 import urllib.error
 import urllib.request
+from collections.abc import Callable
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
 import requests
 
 import rlm.core.rlm as upstream_rlm_module
@@ -27,10 +29,10 @@ DEFAULT_WAGGLE_RLM_SYSTEM_PROMPT = (
     "Use Waggle retrieval first. Treat raw `context` as fallback only. "
     "When you need tool execution, reply with exactly one ```repl``` block and no extra prose. Never use ```python. "
     "If the question asks for pairs of user IDs matching labels or properties, your very first action must be exactly: "
-    "`final_answer = answer_pair_users_by_label(query, labels=[...], top_k=8)` then `FINAL_VAR(\"final_answer\")` in the same `repl` block. "
+    '`final_answer = answer_pair_users_by_label(query, labels=[...], top_k=8)` then `FINAL_VAR("final_answer")` in the same `repl` block. '
     "For pair-shaped questions, do not call `answer_with_waggle`, `extract_waggle_records`, `classify_waggle_records`, `index_waggle_fields`, `search_waggle`, or `read_node` before trying `answer_pair_users_by_label`. "
     "As soon as qualifying users are identified for a pair-shaped question, finalize immediately and stop. Do not do extra exploration after you have enough evidence. "
-    "For non-pair questions, first action: `answer_with_waggle(question=\"...\", top_k=3)`. "
+    'For non-pair questions, first action: `answer_with_waggle(question="...", top_k=3)`. '
     "If you need structure, use `extract_waggle_records(query, top_k=3)`, `classify_waggle_records(query, top_k=3)`, or `index_waggle_fields(query, field_name, top_k=3)`. "
     "Only use `search_waggle` or `read_node` for targeted follow-up. "
     "Do not import modules, do not invent fields or objects, and do not parse raw node dicts by guessing keys. "

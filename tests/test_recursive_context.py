@@ -8,13 +8,12 @@ Test 4: Updates preference
 Test 5: MCP tool registered + aliases resolve
 Test 6: Fallback safety (no hybrid retriever)
 """
+
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -24,10 +23,8 @@ from waggle.models import Edge, Node, NodeType, RelationType, SubgraphResult
 from waggle.recursive_context import (
     RecursiveContextController,
     RecursiveContextResult,
-    RecursiveSubquery,
     _Hit,
 )
-
 
 # ---------------------------------------------------------------------------
 # Shared test helpers
@@ -113,7 +110,7 @@ class TestDecomposition:
         )
 
         purposes = {sq.purpose for sq in subqueries}
-        queries_text = " ".join(sq.query for sq in subqueries).lower()
+        " ".join(sq.query for sq in subqueries).lower()
 
         # Must include decisions, unfinished work, constraints, implementation
         assert "decisions" in purposes, f"Missing 'decisions' in {purposes}"
@@ -162,14 +159,16 @@ class TestBudgetCompression:
     def _make_many_hits(self, count: int = 50) -> list[_Hit]:
         hits = []
         for i in range(count):
-            hits.append(_Hit(
-                node_id=f"node-{i}",
-                label=f"Decision {i}: use framework X for component Y",
-                content=f"We decided to use framework X for component Y because of reason {i}. " * 3,
-                node_type="decision",
-                score=1.0 - (i * 0.01),
-                source="graph",
-            ))
+            hits.append(
+                _Hit(
+                    node_id=f"node-{i}",
+                    label=f"Decision {i}: use framework X for component Y",
+                    content=f"We decided to use framework X for component Y because of reason {i}. " * 3,
+                    node_type="decision",
+                    score=1.0 - (i * 0.01),
+                    source="graph",
+                )
+            )
         return hits
 
     def test_context_pack_within_budget_plus_15_percent(self) -> None:
@@ -214,9 +213,7 @@ class TestBudgetCompression:
             token_budget=400,
         )
 
-        assert result.token_estimate <= int(400 * 1.15), (
-            f"token_estimate {result.token_estimate} exceeds 400 * 1.15"
-        )
+        assert result.token_estimate <= int(400 * 1.15), f"token_estimate {result.token_estimate} exceeds 400 * 1.15"
         assert result.context_pack  # non-empty
 
     def test_empty_graph_returns_gracefully(self, tmp_path: Path) -> None:
@@ -273,10 +270,22 @@ class TestConflictInclusion:
         """_resolve_updates_and_conflicts must populate conflict_entries."""
         controller = RecursiveContextController(graph=MagicMock())
 
-        hit_a = _Hit(node_id="a", label="Use Redis", content="Use Redis for caching",
-                     node_type="decision", score=0.8, source="graph")
-        hit_b = _Hit(node_id="b", label="Use Memcached", content="Use Memcached for caching",
-                     node_type="decision", score=0.7, source="graph")
+        hit_a = _Hit(
+            node_id="a",
+            label="Use Redis",
+            content="Use Redis for caching",
+            node_type="decision",
+            score=0.8,
+            source="graph",
+        )
+        hit_b = _Hit(
+            node_id="b",
+            label="Use Memcached",
+            content="Use Memcached for caching",
+            node_type="decision",
+            score=0.7,
+            source="graph",
+        )
         edge = make_edge("a", "b", "contradicts")
 
         _, conflicts = controller._resolve_updates_and_conflicts([hit_a, hit_b], [edge])
@@ -297,10 +306,12 @@ class TestUpdatesPreference:
         """Node with updates edge should rank above the superseded node."""
         controller = RecursiveContextController(graph=MagicMock())
 
-        older = _Hit(node_id="old", label="Old decision", content="Use Flask",
-                     node_type="decision", score=0.9, source="graph")
-        newer = _Hit(node_id="new", label="New decision", content="Use FastAPI",
-                     node_type="decision", score=0.7, source="graph")
+        older = _Hit(
+            node_id="old", label="Old decision", content="Use Flask", node_type="decision", score=0.9, source="graph"
+        )
+        newer = _Hit(
+            node_id="new", label="New decision", content="Use FastAPI", node_type="decision", score=0.7, source="graph"
+        )
         # newer updates older
         edge = make_edge("new", "old", "updates")
 
@@ -308,18 +319,14 @@ class TestUpdatesPreference:
         ranked = controller._rank_hits(updated_hits)
 
         ranked_ids = [h.node_id for h in ranked]
-        assert ranked_ids.index("new") < ranked_ids.index("old"), (
-            f"Expected 'new' before 'old' in {ranked_ids}"
-        )
+        assert ranked_ids.index("new") < ranked_ids.index("old"), f"Expected 'new' before 'old' in {ranked_ids}"
 
     def test_superseded_node_score_reduced(self) -> None:
         """Node targeted by updates edge should have its score reduced."""
         controller = RecursiveContextController(graph=MagicMock())
 
-        older = _Hit(node_id="old", label="Old", content="Old content",
-                     node_type="decision", score=0.9, source="graph")
-        newer = _Hit(node_id="new", label="New", content="New content",
-                     node_type="decision", score=0.5, source="graph")
+        older = _Hit(node_id="old", label="Old", content="Old content", node_type="decision", score=0.9, source="graph")
+        newer = _Hit(node_id="new", label="New", content="New content", node_type="decision", score=0.5, source="graph")
         edge = make_edge("new", "old", "updates")
 
         updated_hits, _ = controller._resolve_updates_and_conflicts([older, newer], [edge])
@@ -402,7 +409,9 @@ class TestMCPToolRegistered:
         tool_names = {t.name for t in tools}
         assert "build_context" in tool_names, f"build_context not in {sorted(tool_names)}"
 
-    def test_build_context_tool_hidden_when_feature_flag_disabled(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_build_context_tool_hidden_when_feature_flag_disabled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """build_context must be hidden and rejected when the feature flag is disabled."""
         monkeypatch.setattr("waggle.server.RECURSIVE_CONTEXT_ENABLED", False)
         server = self._make_server(tmp_path)
@@ -421,9 +430,7 @@ class TestMCPToolRegistered:
         for alias in ("recursive_context", "assemble_context", "rlm_context"):
             assert alias in _TOOL_ALIASES, f"Alias '{alias}' not in _TOOL_ALIASES"
             canonical, _ = _TOOL_ALIASES[alias]
-            assert canonical == "build_context", (
-                f"Alias '{alias}' resolves to '{canonical}', expected 'build_context'"
-            )
+            assert canonical == "build_context", f"Alias '{alias}' resolves to '{canonical}', expected 'build_context'"
 
     def test_build_context_tool_call_returns_result(self, tmp_path: Path) -> None:
         """Calling build_context via handle_tool_call must return a valid result."""

@@ -146,9 +146,7 @@ def build_rlm_system_prompt(
     # Format custom tools section if provided
     tools_formatted = format_tools_for_prompt(custom_tools)
     if tools_formatted:
-        custom_tools_section = (
-            f"\n6. Custom tools and data available in the REPL:\n{tools_formatted}"
-        )
+        custom_tools_section = f"\n6. Custom tools and data available in the REPL:\n{tools_formatted}"
     else:
         custom_tools_section = ""
 
@@ -175,9 +173,7 @@ def build_user_prompt(
 ) -> dict[str, str]:
     if iteration == 0:
         safeguard = "You have not interacted with the REPL environment or seen your prompt / context yet. Your next action should be to look through and figure out how to answer the prompt, so don't just provide a final answer yet.\n\n"
-        prompt = safeguard + (
-            USER_PROMPT_WITH_ROOT.format(root_prompt=root_prompt) if root_prompt else USER_PROMPT
-        )
+        prompt = safeguard + (USER_PROMPT_WITH_ROOT.format(root_prompt=root_prompt) if root_prompt else USER_PROMPT)
     else:
         prompt = "The history before is your previous interactions with the REPL environment. " + (
             USER_PROMPT_WITH_ROOT.format(root_prompt=root_prompt) if root_prompt else USER_PROMPT
@@ -185,7 +181,9 @@ def build_user_prompt(
 
     # Inform model about multiple contexts if present
     if context_count > 1:
-        prompt += f"\n\nNote: You have {context_count} contexts available (context_0 through context_{context_count - 1})."
+        prompt += (
+            f"\n\nNote: You have {context_count} contexts available (context_0 through context_{context_count - 1})."
+        )
 
     # Inform model about prior conversation histories if present
     if history_count > 0:

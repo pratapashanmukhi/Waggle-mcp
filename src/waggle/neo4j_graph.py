@@ -4,7 +4,7 @@ import base64
 import json
 import threading
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -16,8 +16,8 @@ from waggle.abhi import (
     ABHI_ENCRYPTION_ALGORITHM,
     ABHI_SPEC_VERSION,
     abhi_to_snapshot,
-    dispatch_abhi_event,
     diff_abhi_files,
+    dispatch_abhi_event,
     filter_snapshot_by_scope,
     inspect_abhi_document,
     load_abhi_chunk_file,
@@ -29,15 +29,15 @@ from waggle.abhi import (
 )
 from waggle.auth import api_key_prefix, generate_api_key, hash_api_key, verify_api_key
 from waggle.context_bundle import build_context_bundle, build_query_summary, export_context_bundle_files
-from waggle.evidence import build_observation_evidence, merge_evidence_records, merge_validity_windows
 from waggle.errors import AuthenticationError, ValidationFailure
+from waggle.evidence import build_observation_evidence, merge_evidence_records, merge_validity_windows
 from waggle.intelligence import (
-    compatible_node_types,
     canonical_concept_overlap,
+    compatible_node_types,
     contains_conflicting_months,
     contains_conflicting_numbers,
-    describes_rejected_or_limited_option,
     content_token_jaccard,
+    describes_rejected_or_limited_option,
     detect_conflict_reason,
     extract_choice_entity,
     extract_conversation_candidates,
@@ -85,9 +85,9 @@ from waggle.models import (
     ConnectedNodeStat,
     ContextBundleExportResult,
     ContextScopeResult,
+    ContextTimelineItem,
     ContextWindow,
     ContextWindowEdge,
-    ContextTimelineItem,
     Edge,
     EvidenceRecord,
     FusionHit,
@@ -102,18 +102,18 @@ from waggle.models import (
     NodeType,
     ObservationResult,
     PrimeContextResult,
-    ReplayHit,
     RecentNodeStat,
     RelationType,
+    ReplayHit,
     RetentionPolicyRecord,
     RetentionPruneRunRecord,
     SubgraphResult,
-    TranscriptRecord,
-    normalize_relationship,
     TenantRecord,
     TimelineResult,
     TopicCluster,
     TopicResult,
+    TranscriptRecord,
+    normalize_relationship,
     utc_now,
 )
 
@@ -136,8 +136,8 @@ def _default_ui_state() -> dict[str, Any]:
 def _parse_datetime(raw: str) -> datetime:
     value = datetime.fromisoformat(raw)
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _encode_metadata(metadata: dict[str, Any] | None) -> str:
@@ -212,7 +212,11 @@ def _scope_matches(node: Node, *, agent_id: str = "", project: str = "", session
         return False
     if normalized_project:
         project_tags = {str(tag).strip().lower() for tag in node.tags}
-        if node.project.strip().lower() != normalized_project and normalized_project not in project_tags and f"project:{normalized_project}" not in project_tags:
+        if (
+            node.project.strip().lower() != normalized_project
+            and normalized_project not in project_tags
+            and f"project:{normalized_project}" not in project_tags
+        ):
             return False
     return True
 
@@ -358,7 +362,7 @@ class Neo4jMemoryGraph:
             ).consume()
             self.ensure_tenant(self.tenant_id)
 
-    def for_tenant(self, tenant_id: str) -> "Neo4jMemoryGraph":
+    def for_tenant(self, tenant_id: str) -> Neo4jMemoryGraph:
         return Neo4jMemoryGraph(
             uri=self._uri,
             username=self._username,
@@ -760,7 +764,9 @@ class Neo4jMemoryGraph:
         )
         next_enabled = current.enabled if enabled is None else bool(enabled)
         next_retention_days = current.retention_days if retention_days is None else int(retention_days)
-        next_prune_interval_hours = current.prune_interval_hours if prune_interval_hours is None else int(prune_interval_hours)
+        next_prune_interval_hours = (
+            current.prune_interval_hours if prune_interval_hours is None else int(prune_interval_hours)
+        )
         if next_retention_days < 1:
             raise ValidationFailure("Retention days must be at least 1.")
         if next_prune_interval_hours < 1:
@@ -1515,12 +1521,16 @@ class Neo4jMemoryGraph:
             raise ValueError("max_nodes must be at least 1.")
         if max_depth < 0:
             raise ValueError("max_depth cannot be negative.")
-        normalized_mode = {"replay": "verbatim", "fusion": "hybrid"}.get(retrieval_mode.strip().lower(), retrieval_mode.strip().lower())
+        normalized_mode = {"replay": "verbatim", "fusion": "hybrid"}.get(
+            retrieval_mode.strip().lower(), retrieval_mode.strip().lower()
+        )
         # Accept "hybrid_no_rerank" as alias for "hybrid" (reranking is configurable via HybridRetrievalConfig)
         if normalized_mode == "hybrid_no_rerank":
             normalized_mode = "hybrid"
         if normalized_mode not in {"graph", "verbatim", "hybrid"}:
-            raise ValidationFailure("retrieval_mode must be one of: graph, verbatim, hybrid, hybrid_no_rerank (benchmark modes: graph_only, verbatim_only).")
+            raise ValidationFailure(
+                "retrieval_mode must be one of: graph, verbatim, hybrid, hybrid_no_rerank (benchmark modes: graph_only, verbatim_only)."
+            )
 
         graph_result = (
             self._query_graph_only(
@@ -1609,16 +1619,14 @@ class Neo4jMemoryGraph:
                 for node_id, embedding in embeddings_by_id.items()
             }
             lexical_by_id = {
-                node_id: lexical_overlap(query, node.label, node.content)
-                for node_id, node in nodes_by_id.items()
+                node_id: lexical_overlap(query, node.label, node.content) for node_id, node in nodes_by_id.items()
             }
 
             seed_count = min(total_nodes, max(1, max_nodes // 2))
             seed_candidates = [
                 (
                     node_id,
-                    (0.72 * similarity_by_id.get(node_id, 0.0))
-                    + (0.28 * lexical_by_id.get(node_id, 0.0)),
+                    (0.72 * similarity_by_id.get(node_id, 0.0)) + (0.28 * lexical_by_id.get(node_id, 0.0)),
                     self._seed_temporal_order(nodes_by_id[node_id], temporal_hints),
                 )
                 for node_id in nodes_by_id
@@ -1916,13 +1924,7 @@ class Neo4jMemoryGraph:
         weight: float | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Edge:
-        if (
-            source_id is None
-            and target_id is None
-            and relationship is None
-            and weight is None
-            and metadata is None
-        ):
+        if source_id is None and target_id is None and relationship is None and weight is None and metadata is None:
             raise ValueError("At least one field must be provided for edge update.")
 
         with self._lock, self._session() as session:
@@ -2349,7 +2351,9 @@ class Neo4jMemoryGraph:
         normalized_mode = mode.strip().lower()
         normalized_format = format.strip().lower()
         normalized_audience = audience.strip().lower()
-        normalized_retrieval_mode = {"replay": "verbatim", "fusion": "hybrid"}.get(retrieval_mode.strip().lower(), retrieval_mode.strip().lower())
+        normalized_retrieval_mode = {"replay": "verbatim", "fusion": "hybrid"}.get(
+            retrieval_mode.strip().lower(), retrieval_mode.strip().lower()
+        )
         if normalized_mode not in {"prime", "query", "graph"}:
             raise ValidationFailure("mode must be one of: prime, query, graph.")
         if normalized_format not in {"markdown", "json", "both"}:
@@ -2400,27 +2404,31 @@ class Neo4jMemoryGraph:
                     for node in [self._node_from_props(record["n"])]
                     if _scope_matches(node, agent_id=agent_id, project=project, session_id=session_id)
                 ]
-                selected_edges = [
-                    Edge(
-                        id=record["id"],
-                        source_id=record["source_id"],
-                        target_id=record["target_id"],
-                        relationship=record["relationship"],
-                        weight=float(record["weight"]),
-                        metadata=_decode_metadata(record["metadata"]),
-                        created_at=_parse_datetime(record["created_at"]),
-                    )
-                    for record in session.run(
-                        """
+                selected_edges = (
+                    [
+                        Edge(
+                            id=record["id"],
+                            source_id=record["source_id"],
+                            target_id=record["target_id"],
+                            relationship=record["relationship"],
+                            weight=float(record["weight"]),
+                            metadata=_decode_metadata(record["metadata"]),
+                            created_at=_parse_datetime(record["created_at"]),
+                        )
+                        for record in session.run(
+                            """
                         MATCH (source:MemoryNode {tenant_id: $tenant_id})-[r:MEMORY_EDGE {tenant_id: $tenant_id}]->(target:MemoryNode {tenant_id: $tenant_id})
                         RETURN r.id AS id, source.id AS source_id, target.id AS target_id,
                                r.relationship AS relationship, r.weight AS weight,
                                r.metadata AS metadata, r.created_at AS created_at
                         ORDER BY r.created_at ASC
                         """,
-                        tenant_id=self.tenant_id,
-                    )
-                ] if include_edges else []
+                            tenant_id=self.tenant_id,
+                        )
+                    ]
+                    if include_edges
+                    else []
+                )
             if include_edges:
                 selected_ids = {node.id for node in selected_nodes}
                 selected_edges = [
@@ -2679,7 +2687,9 @@ class Neo4jMemoryGraph:
     def diff_abhi(self, *, input_path_a: str | Path, input_path_b: str | Path) -> AbhiDiffResult:
         return diff_abhi_files(input_path_a=input_path_a, input_path_b=input_path_b)
 
-    def query_abhi(self, *, input_path: str | Path, query_id: str = "", query_text: str = "", passphrase: str = "") -> AbhiQueryResult:
+    def query_abhi(
+        self, *, input_path: str | Path, query_id: str = "", query_text: str = "", passphrase: str = ""
+    ) -> AbhiQueryResult:
         return query_abhi_file(input_path=input_path, query_id=query_id, query_text=query_text, passphrase=passphrase)
 
     def load_abhi_chunks(
@@ -3318,9 +3328,7 @@ class Neo4jMemoryGraph:
             return False
         if normalized_project and record.project.strip().lower() != normalized_project:
             return False
-        if normalized_session and record.session_id.strip().lower() != normalized_session:
-            return False
-        return True
+        return not (normalized_session and record.session_id.strip().lower() != normalized_session)
 
     def list_transcript_records(
         self,
@@ -3443,7 +3451,7 @@ class Neo4jMemoryGraph:
         if raw in (None, ""):
             return None
         if isinstance(raw, datetime):
-            return raw if raw.tzinfo is not None else raw.replace(tzinfo=timezone.utc)
+            return raw if raw.tzinfo is not None else raw.replace(tzinfo=UTC)
         try:
             return _parse_datetime(str(raw))
         except ValueError:
@@ -3489,9 +3497,7 @@ class Neo4jMemoryGraph:
             ):
                 continue
             if contains_conflicting_numbers(node.content, existing_node.content) and (
-                node_entity is None
-                or existing_entity is None
-                or node_entity[0] == existing_entity[0]
+                node_entity is None or existing_entity is None or node_entity[0] == existing_entity[0]
             ):
                 continue
             if contains_conflicting_months(node.content, existing_node.content):
@@ -3620,12 +3626,15 @@ class Neo4jMemoryGraph:
             reason = detect_conflict_reason(existing_node, node)
             if reason is None:
                 continue
-            if self._find_existing_edge(
-                session,
-                source_id=node.id,
-                target_id=existing_node.id,
-                relationship=RelationType.CONTRADICTS,
-            ) is None:
+            if (
+                self._find_existing_edge(
+                    session,
+                    source_id=node.id,
+                    target_id=existing_node.id,
+                    relationship=RelationType.CONTRADICTS,
+                )
+                is None
+            ):
                 edge = Edge(
                     tenant_id=self.tenant_id,
                     source_id=node.id,
@@ -4058,13 +4067,23 @@ class Neo4jMemoryGraph:
                 "tags": list(props.get("tags") or []),
                 "source_prompt": props.get("source_prompt") or "",
                 "metadata": _decode_metadata(props.get("metadata")),
-                "evidence_records": [record.model_dump(mode="json") for record in _decode_evidence_records(props.get("evidence_records"))],
+                "evidence_records": [
+                    record.model_dump(mode="json") for record in _decode_evidence_records(props.get("evidence_records"))
+                ],
                 "valid_from": props.get("valid_from"),
                 "valid_to": props.get("valid_to"),
                 "created_at": props["created_at"],
                 "updated_at": props["updated_at"],
                 "access_count": int(props.get("access_count") or 0),
-                **({"embedding": base64.b64encode(np.array(props.get("embedding") or [], dtype=np.float32).astype(np.float32).tobytes()).decode("ascii")} if include_embeddings and props.get("embedding") else {}),
+                **(
+                    {
+                        "embedding": base64.b64encode(
+                            np.array(props.get("embedding") or [], dtype=np.float32).astype(np.float32).tobytes()
+                        ).decode("ascii")
+                    }
+                    if include_embeddings and props.get("embedding")
+                    else {}
+                ),
             }
             for props in (
                 record["n"]
@@ -4098,11 +4117,7 @@ class Neo4jMemoryGraph:
         ]
         snapshot = {"schema_version": SCHEMA_VERSION, "tenant_id": self.tenant_id, "nodes": nodes, "edges": edges}
         if include_embeddings:
-            snapshot["embeddings"] = {
-                node["id"]: node["embedding"]
-                for node in nodes
-                if node.get("embedding")
-            }
+            snapshot["embeddings"] = {node["id"]: node["embedding"] for node in nodes if node.get("embedding")}
             for node in nodes:
                 node.pop("embedding", None)
         return snapshot
@@ -4131,7 +4146,9 @@ class Neo4jMemoryGraph:
             tags=raw_node.get("tags", []),
             embedding=embedding,
             source_prompt=raw_node.get("source_prompt", ""),
-            evidence_records=_encode_evidence_records([EvidenceRecord.model_validate(item) for item in raw_node.get("evidence_records", [])]),
+            evidence_records=_encode_evidence_records(
+                [EvidenceRecord.model_validate(item) for item in raw_node.get("evidence_records", [])]
+            ),
             valid_from=raw_node.get("valid_from"),
             valid_to=raw_node.get("valid_to"),
             created_at=raw_node["created_at"],
@@ -4172,7 +4189,9 @@ class Neo4jMemoryGraph:
             tags=raw_node.get("tags", []),
             embedding=embedding,
             source_prompt=raw_node.get("source_prompt", ""),
-            evidence_records=_encode_evidence_records([EvidenceRecord.model_validate(item) for item in raw_node.get("evidence_records", [])]),
+            evidence_records=_encode_evidence_records(
+                [EvidenceRecord.model_validate(item) for item in raw_node.get("evidence_records", [])]
+            ),
             valid_from=raw_node.get("valid_from"),
             valid_to=raw_node.get("valid_to"),
             created_at=raw_node["created_at"],

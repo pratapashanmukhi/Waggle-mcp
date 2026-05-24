@@ -5,7 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from waggle.server import _build_parser, _write_antigravity, _write_claude_desktop, _write_codex, _write_cursor, _write_other
+from waggle.server import (
+    _build_parser,
+    _write_antigravity,
+    _write_claude_desktop,
+    _write_codex,
+    _write_cursor,
+    _write_other,
+)
 
 
 def test_parser_accepts_explicit_serve_transport_override() -> None:

@@ -13,6 +13,7 @@ Protocol: reads JSON from stdin, writes JSON to stdout.
 Always exits 0 — never blocks the user's session.
 Timeout: 5 seconds.
 """
+
 from __future__ import annotations
 
 import json
@@ -25,8 +26,8 @@ from typing import Any
 # Ensure waggle src is importable when run as a script
 _HERE = Path(__file__).resolve()
 for _candidate in [
-    _HERE.parents[4] / "src",   # repo layout: src/waggle/hooks/claude_code/
-    _HERE.parents[3],            # installed package
+    _HERE.parents[4] / "src",  # repo layout: src/waggle/hooks/claude_code/
+    _HERE.parents[3],  # installed package
 ]:
     if (_candidate / "waggle").exists() and str(_candidate) not in sys.path:
         sys.path.insert(0, str(_candidate))
@@ -43,7 +44,7 @@ _TASK_PATTERN = re.compile(
 )
 
 
-def _timeout_handler(signum: int, frame: Any) -> None:  # noqa: ANN001
+def _timeout_handler(signum: int, frame: Any) -> None:
     raise TimeoutError("Waggle pre_response hook timed out")
 
 
@@ -94,7 +95,7 @@ def main() -> None:
         from waggle.embeddings import EmbeddingModel
         from waggle.graph import MemoryGraph
         from waggle.hooks.claude_code.common import checkpoint_path, read_checkpoint_manifest, resolve_scope
-        from waggle.recursive_context import RecursiveContextController, RECURSIVE_CONTEXT_ENABLED
+        from waggle.recursive_context import RECURSIVE_CONTEXT_ENABLED, RecursiveContextController
 
         config = AppConfig.from_env()
         if config.backend != "sqlite":
@@ -165,8 +166,7 @@ def main() -> None:
                     )
                     if qr.nodes:
                         local_context_text = "\n".join(
-                            f"[{n.node_type.value}] {n.label}: {n.content[:200]}"
-                            for n in qr.nodes[:5]
+                            f"[{n.node_type.value}] {n.label}: {n.content[:200]}" for n in qr.nodes[:5]
                         )
                 except Exception:
                     local_context_text = ""
@@ -187,10 +187,14 @@ def main() -> None:
             context_text = load_from_db(include_query_fallback=True)
 
         if context_text:
-            print(json.dumps({
-                "type": "system_reminder",
-                "content": f"[Waggle memory context]\n{context_text}",
-            }))
+            print(
+                json.dumps(
+                    {
+                        "type": "system_reminder",
+                        "content": f"[Waggle memory context]\n{context_text}",
+                    }
+                )
+            )
         else:
             print(json.dumps({}))
 

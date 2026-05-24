@@ -18,7 +18,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 from waggle.abhi import merge_abhi_documents
-from waggle.models import DrivePullResult, DrivePushResult, DriveShareResult
+from waggle.models import DrivePushResult, DriveShareResult
 
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
@@ -148,7 +148,21 @@ def merge_downloaded_abhi(
     output_path: str | Path,
 ) -> str:
     merged = merge_abhi_documents(
-        {"graph": {"nodes": [], "edges": []}, "schema": {}, "constraints": [], "ai_rules": {}, "ui": {}, "external_refs": [], "chunks": {}, "embeddings": {"vectors": {}}, "queries": {}, "events": {}, "versions": [], "waggle": {}, "integrity": {}},
+        {
+            "graph": {"nodes": [], "edges": []},
+            "schema": {},
+            "constraints": [],
+            "ai_rules": {},
+            "ui": {},
+            "external_refs": [],
+            "chunks": {},
+            "embeddings": {"vectors": {}},
+            "queries": {},
+            "events": {},
+            "versions": [],
+            "waggle": {},
+            "integrity": {},
+        },
         local_document,
         remote_document,
         base_input_path="local://empty",
@@ -171,30 +185,32 @@ def _run_local_oauth_flow(
     client_id = str(client_info.get("client_id", "")).strip()
     client_secret = str(client_info.get("client_secret", "")).strip()
     redirect_uris = list(client_info.get("redirect_uris") or [])
-    redirect_uri = next((uri for uri in redirect_uris if uri.startswith("http://127.0.0.1") or uri.startswith("http://localhost")), "http://127.0.0.1:8765/")
+    redirect_uri = next(
+        (uri for uri in redirect_uris if uri.startswith(("http://127.0.0.1", "http://localhost"))),
+        "http://127.0.0.1:8765/",
+    )
     parsed = urllib.parse.urlparse(redirect_uri)
     code_verifier = secrets.token_urlsafe(48)
     code_challenge = _pkce_challenge(code_verifier)
     state = secrets.token_urlsafe(24)
     code_holder: dict[str, str] = {}
-    server = _OAuthCallbackServer(parsed.hostname or "127.0.0.1", parsed.port or 8765, parsed.path or "/", state, code_holder)
+    server = _OAuthCallbackServer(
+        parsed.hostname or "127.0.0.1", parsed.port or 8765, parsed.path or "/", state, code_holder
+    )
     thread = threading.Thread(target=server.serve_once, daemon=True)
     thread.start()
-    auth_url = (
-        "https://accounts.google.com/o/oauth2/v2/auth?"
-        + urllib.parse.urlencode(
-            {
-                "client_id": client_id,
-                "redirect_uri": redirect_uri,
-                "response_type": "code",
-                "scope": " ".join(scopes),
-                "access_type": "offline",
-                "prompt": "consent",
-                "state": state,
-                "code_challenge": code_challenge,
-                "code_challenge_method": "S256",
-            }
-        )
+    auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(
+        {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": " ".join(scopes),
+            "access_type": "offline",
+            "prompt": "consent",
+            "state": state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+        }
     )
     if open_browser:
         webbrowser.open(auth_url)
@@ -247,7 +263,7 @@ class _OAuthCallbackServer:
         code_holder = self.code_holder
 
         class Handler(BaseHTTPRequestHandler):
-            def do_GET(self) -> None:  # noqa: N802
+            def do_GET(self) -> None:
                 parsed = urllib.parse.urlparse(self.path)
                 params = urllib.parse.parse_qs(parsed.query)
                 if parsed.path != expected_path or params.get("state", [""])[0] != expected_state:
@@ -260,7 +276,7 @@ class _OAuthCallbackServer:
                 self.end_headers()
                 self.wfile.write(b"Waggle Drive authentication complete. You can close this window.")
 
-            def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+            def log_message(self, format: str, *args: object) -> None:
                 return
 
         with HTTPServer((self.host, self.port), Handler) as httpd:

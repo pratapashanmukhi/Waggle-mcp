@@ -8,10 +8,10 @@ Covers:
 - resolve_conflict with an invalid winner raises ValueError.
 - WAGGLE_ENFORCE_VALID_TO=false restores legacy behaviour.
 """
+
 from __future__ import annotations
 
-import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -20,10 +20,10 @@ import pytest
 from waggle.graph import MemoryGraph
 from waggle.models import NodeType, RelationType
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class FakeEmbeddingModel:
     model_name = "fake-model"
@@ -60,24 +60,25 @@ def make_graph(tmp_path: Path) -> MemoryGraph:
 def _utc(dt: datetime) -> datetime:
     """Ensure *dt* is timezone-aware UTC."""
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
-NOW = datetime.now(timezone.utc)
-T0 = NOW - timedelta(hours=2)   # two hours ago
-T1 = NOW - timedelta(hours=1)   # one hour ago  (valid_to in the past)
+NOW = datetime.now(UTC)
+T0 = NOW - timedelta(hours=2)  # two hours ago
+T1 = NOW - timedelta(hours=1)  # one hour ago  (valid_to in the past)
 T_HALF = NOW - timedelta(minutes=90)  # between T0 and T1
-T2 = NOW + timedelta(hours=1)   # one hour in the future
+T2 = NOW + timedelta(hours=1)  # one hour in the future
 
 
 # ---------------------------------------------------------------------------
 # Tests: default query excludes expired nodes
 # ---------------------------------------------------------------------------
+
 
 def test_expired_node_excluded_by_default(tmp_path: Path) -> None:
     """A node with valid_to in the past must NOT appear in default query results."""
@@ -125,6 +126,7 @@ def test_expired_node_excluded_from_aggregate_by_default(tmp_path: Path) -> None
 # ---------------------------------------------------------------------------
 # Tests: include_invalidated=True returns expired nodes
 # ---------------------------------------------------------------------------
+
 
 def test_expired_node_returned_with_include_invalidated(tmp_path: Path) -> None:
     """include_invalidated=True must return nodes whose valid_to has passed."""
@@ -177,6 +179,7 @@ def test_expired_node_returned_with_include_invalidated_aggregate(tmp_path: Path
 # ---------------------------------------------------------------------------
 # Tests: as_of parameter
 # ---------------------------------------------------------------------------
+
 
 def test_as_of_within_validity_window_returns_node(tmp_path: Path) -> None:
     """as_of between valid_from and valid_to must return the node."""
@@ -260,6 +263,7 @@ def test_as_of_aggregate_within_window(tmp_path: Path) -> None:
 # Tests: resolve_conflict sets valid_to on the losing node
 # ---------------------------------------------------------------------------
 
+
 def test_resolve_conflict_with_winner_sets_valid_to_on_loser(tmp_path: Path) -> None:
     """resolve_conflict(winner=A) must set valid_to on B (the loser), not on A."""
     graph = make_graph(tmp_path)
@@ -282,9 +286,9 @@ def test_resolve_conflict_with_winner_sets_valid_to_on_loser(tmp_path: Path) -> 
         relationship=RelationType.CONTRADICTS.value,
     )
 
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     graph.resolve_conflict(edge_id=edge.id, winner=node_a.id)
-    after = datetime.now(timezone.utc)
+    after = datetime.now(UTC)
 
     # Reload nodes from DB
     refreshed_a = graph.get_node(node_a.id)
@@ -434,6 +438,7 @@ def test_resolve_conflict_without_winner_does_not_set_valid_to(tmp_path: Path) -
 # Tests: invalid winner raises ValueError
 # ---------------------------------------------------------------------------
 
+
 def test_resolve_conflict_invalid_winner_raises(tmp_path: Path) -> None:
     """resolve_conflict with a winner not on the edge must raise ValueError."""
     graph = make_graph(tmp_path)
@@ -470,6 +475,7 @@ def test_resolve_conflict_invalid_winner_raises(tmp_path: Path) -> None:
 # Tests: WAGGLE_ENFORCE_VALID_TO=false restores legacy behaviour
 # ---------------------------------------------------------------------------
 
+
 def test_enforce_valid_to_false_returns_expired_nodes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """With WAGGLE_ENFORCE_VALID_TO=false, expired nodes must appear in default queries."""
     monkeypatch.setenv("WAGGLE_ENFORCE_VALID_TO", "false")
@@ -498,7 +504,9 @@ def test_enforce_valid_to_false_returns_expired_nodes(tmp_path: Path, monkeypatc
     assert node_id in returned_ids, "Expired node should appear when WAGGLE_ENFORCE_VALID_TO=false"
 
 
-def test_enforce_valid_to_false_aggregate_returns_expired_nodes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_enforce_valid_to_false_aggregate_returns_expired_nodes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """With WAGGLE_ENFORCE_VALID_TO=false, expired nodes must appear in aggregate."""
     monkeypatch.setenv("WAGGLE_ENFORCE_VALID_TO", "false")
 
@@ -524,6 +532,7 @@ def test_enforce_valid_to_false_aggregate_returns_expired_nodes(tmp_path: Path, 
 # ---------------------------------------------------------------------------
 # Tests: valid nodes (no valid_to) are always returned
 # ---------------------------------------------------------------------------
+
 
 def test_node_without_valid_to_always_returned(tmp_path: Path) -> None:
     """Nodes with valid_to=NULL must always appear in default queries."""

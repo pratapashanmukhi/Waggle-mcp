@@ -1,11 +1,8 @@
 """Tests for waggle-mcp demo command and demo.abhi fixture."""
+
 from __future__ import annotations
 
-import json
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,15 +15,15 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import numpy as np
-from waggle.embeddings import EmbeddingModel
-from waggle.graph import MemoryGraph
-from waggle.server import _run_demo, _build_parser
 
+from waggle.graph import MemoryGraph
+from waggle.server import _build_parser, _run_demo
 
 DEMO_ABHI = ROOT / "examples" / "demo.abhi"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 class FakeEmbeddingModel:
     model_name = "fake-model"
@@ -56,11 +53,11 @@ class FakeEmbeddingModel:
 
 # ── demo.abhi fixture tests ───────────────────────────────────────────────────
 
+
 def test_demo_abhi_exists() -> None:
     """examples/demo.abhi must be checked in."""
     assert DEMO_ABHI.exists(), (
-        f"examples/demo.abhi not found at {DEMO_ABHI}. "
-        "Run: python3 examples/generate_demo_abhi.py"
+        f"examples/demo.abhi not found at {DEMO_ABHI}. Run: python3 examples/generate_demo_abhi.py"
     )
 
 
@@ -108,17 +105,20 @@ def test_demo_abhi_has_contradiction_edge(tmp_path: Path) -> None:
 
 # ── demo command tests ────────────────────────────────────────────────────────
 
+
 def test_demo_command_exits_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """waggle-mcp demo must exit with code 0."""
     assert DEMO_ABHI.exists(), pytest.skip("demo.abhi not generated yet")
 
     # Patch tempfile.mkdtemp to use tmp_path so we control cleanup
     import tempfile as _tempfile
+
     monkeypatch.setattr(_tempfile, "mkdtemp", lambda **kw: str(tmp_path / "demo-run"))
     (tmp_path / "demo-run").mkdir(exist_ok=True)
 
     # Patch EmbeddingModel to use fake model for speed
     import waggle.server as server_mod
+
     monkeypatch.setattr(server_mod, "EmbeddingModel", lambda name: FakeEmbeddingModel())
 
     args = SimpleNamespace(with_embeddings=False)
@@ -134,10 +134,12 @@ def test_demo_does_not_touch_home_waggle(tmp_path: Path, monkeypatch: pytest.Mon
     mtime_before = home_waggle.stat().st_mtime if home_waggle.exists() else None
 
     import tempfile as _tempfile
+
     monkeypatch.setattr(_tempfile, "mkdtemp", lambda **kw: str(tmp_path / "demo-run"))
     (tmp_path / "demo-run").mkdir(exist_ok=True)
 
     import waggle.server as server_mod
+
     monkeypatch.setattr(server_mod, "EmbeddingModel", lambda name: FakeEmbeddingModel())
 
     args = SimpleNamespace(with_embeddings=False)

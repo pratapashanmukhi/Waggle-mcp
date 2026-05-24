@@ -23,9 +23,7 @@ def get_client(
     elif backend == "vllm":
         from rlm.clients.openai import OpenAIClient
 
-        assert "base_url" in backend_kwargs, (
-            "base_url is required to be set to local vLLM server address for vLLM"
-        )
+        assert "base_url" in backend_kwargs, "base_url is required to be set to local vLLM server address for vLLM"
         return OpenAIClient(**backend_kwargs)
     elif backend == "ollama":
         from rlm.clients.ollama import OllamaClient

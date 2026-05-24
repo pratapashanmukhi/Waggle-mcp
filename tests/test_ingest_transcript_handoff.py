@@ -18,6 +18,7 @@ Coverage:
 - CLI help text includes new command and --export-format
 - Regression: full observe_conversation test suite still passes after refactor
 """
+
 from __future__ import annotations
 
 import io
@@ -33,7 +34,6 @@ import pytest
 from waggle.config import AppConfig
 from waggle.graph import MemoryGraph
 from waggle.models import (
-    NodeType,
     TranscriptIngestionInput,
     TranscriptMessage,
 )
@@ -44,7 +44,6 @@ from waggle.server import (
     _run_admin_command,
     _run_ingest_transcript_handoff,
 )
-
 
 # ---------------------------------------------------------------------------
 # Shared test fixtures
@@ -406,7 +405,9 @@ class TestIngestTranscriptHandoffBackend:
         )
 
         result1 = graph.ingest_transcript_handoff(first_payload, export_format="json", output_path=str(tmp_path / "b1"))
-        result2 = graph.ingest_transcript_handoff(second_payload, export_format="json", output_path=str(tmp_path / "b2"))
+        result2 = graph.ingest_transcript_handoff(
+            second_payload, export_format="json", output_path=str(tmp_path / "b2")
+        )
 
         assert result1.logical_turns_processed == 1
         assert result2.transcript_records_written == 2
@@ -432,7 +433,6 @@ class TestIngestTranscriptHandoffBackend:
         assert 0 in turn_indexes or 2 in turn_indexes
         assert 1 not in turn_indexes
 
-
     def test_duplicate_node_reported_as_reused(self, tmp_path: Path) -> None:
         """When extraction yields a duplicate node, it counts as reused, not created."""
         graph = make_graph(tmp_path)
@@ -443,7 +443,7 @@ class TestIngestTranscriptHandoffBackend:
                 TranscriptMessage(role="assistant", content="Understood, Python for backend."),
             ],
         )
-        result1 = graph.ingest_transcript_handoff(payload, export_format="json", output_path=str(tmp_path / "b1"))
+        graph.ingest_transcript_handoff(payload, export_format="json", output_path=str(tmp_path / "b1"))
         # Run again with different message_ids to bypass transcript dedup but same content
         payload2 = TranscriptIngestionInput(
             session_id="reuse-session",
@@ -462,7 +462,9 @@ class TestIngestTranscriptHandoffBackend:
         payload1 = TranscriptIngestionInput(
             session_id="conflict-session",
             messages=[
-                TranscriptMessage(role="user", content="We chose PostgreSQL over MySQL because ACID compliance matters."),
+                TranscriptMessage(
+                    role="user", content="We chose PostgreSQL over MySQL because ACID compliance matters."
+                ),
                 TranscriptMessage(role="assistant", content="Understood."),
             ],
         )
@@ -471,7 +473,9 @@ class TestIngestTranscriptHandoffBackend:
         payload2 = TranscriptIngestionInput(
             session_id="conflict-session",
             messages=[
-                TranscriptMessage(role="user", content="The team prefers MySQL, we may switch to MySQL.", message_id="c1"),
+                TranscriptMessage(
+                    role="user", content="The team prefers MySQL, we may switch to MySQL.", message_id="c1"
+                ),
                 TranscriptMessage(role="assistant", content="Understood.", message_id="c2"),
             ],
         )
@@ -484,9 +488,7 @@ class TestIngestTranscriptHandoffBackend:
     # Trailing-user completion bug regression tests
     # ------------------------------------------------------------------
 
-    def test_trailing_user_is_completed_when_assistant_arrives_in_next_run(
-        self, tmp_path: Path
-    ) -> None:
+    def test_trailing_user_is_completed_when_assistant_arrives_in_next_run(self, tmp_path: Path) -> None:
         """Core bug regression: trailing user from run-1 must form a logical turn
         when its assistant reply arrives in run-2.
 
@@ -509,8 +511,8 @@ class TestIngestTranscriptHandoffBackend:
         r1 = graph.ingest_transcript_handoff(run1, export_format="json", output_path=str(tmp_path / "b1"))
 
         assert r1.transcript_records_written == 3
-        assert r1.logical_turns_processed == 1        # only the paired turn
-        assert r1.unpaired_trailing_blocks == 1       # m3 is unpaired
+        assert r1.logical_turns_processed == 1  # only the paired turn
+        assert r1.unpaired_trailing_blocks == 1  # m3 is unpaired
 
         # Run 2: same transcript + new assistant completing the trailing user.
         run2 = TranscriptIngestionInput(
@@ -524,15 +526,13 @@ class TestIngestTranscriptHandoffBackend:
         )
         r2 = graph.ingest_transcript_handoff(run2, export_format="json", output_path=str(tmp_path / "b2"))
 
-        assert r2.transcript_records_written == 1     # only m4 is new
-        assert r2.transcript_records_skipped == 3     # m1, m2, m3 already written
-        assert r2.logical_turns_processed == 1        # m3+m4 form the new turn
+        assert r2.transcript_records_written == 1  # only m4 is new
+        assert r2.transcript_records_skipped == 3  # m1, m2, m3 already written
+        assert r2.logical_turns_processed == 1  # m3+m4 form the new turn
         assert r2.unpaired_trailing_blocks == 0
-        assert r2.nodes_created >= 1                  # Redis extracted
+        assert r2.nodes_created >= 1  # Redis extracted
 
-    def test_old_fully_paired_turns_not_re_extracted_on_append(
-        self, tmp_path: Path
-    ) -> None:
+    def test_old_fully_paired_turns_not_re_extracted_on_append(self, tmp_path: Path) -> None:
         """Turns already extracted in run-1 must NOT be re-extracted in run-2
         when new messages are appended, even though they're still in the DB.
         """
@@ -546,7 +546,7 @@ class TestIngestTranscriptHandoffBackend:
                 TranscriptMessage(role="assistant", content="Noted, Python.", message_id="p2"),
             ],
         )
-        r1 = graph.ingest_transcript_handoff(run1, export_format="json", output_path=str(tmp_path / "b1"))
+        graph.ingest_transcript_handoff(run1, export_format="json", output_path=str(tmp_path / "b1"))
         nodes_after_run1 = graph.get_stats().total_nodes
 
         run2 = TranscriptIngestionInput(
@@ -567,9 +567,7 @@ class TestIngestTranscriptHandoffBackend:
         # Node count grows with new content; old nodes are not duplicated.
         assert graph.get_stats().total_nodes >= nodes_after_run1
 
-    def test_incremental_client_sends_only_new_messages(
-        self, tmp_path: Path
-    ) -> None:
+    def test_incremental_client_sends_only_new_messages(self, tmp_path: Path) -> None:
         """Clients that always send only NEW messages (not the full history) must
         still have the trailing-user turn completed correctly.
 
@@ -635,9 +633,7 @@ class TestCLIIngestTranscriptHandoff:
             neo4j_database="",
         )
 
-    def test_file_input_success_path(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_file_input_success_path(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         config = self._make_config(tmp_path)
         payload = make_transcript_payload(
             [
@@ -685,9 +681,7 @@ class TestCLIIngestTranscriptHandoff:
         assert result["checkpoint_scope"] == "session"
         assert Path(result["checkpoint_path"]).exists()
 
-    def test_scope_override_precedence(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_scope_override_precedence(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         config = self._make_config(tmp_path)
         payload = make_transcript_payload(
             [
@@ -738,9 +732,7 @@ class TestCLIIngestTranscriptHandoff:
         assert exit_code == 1
         assert stderr_payload["code"] == "payload_too_large"
 
-    def test_empty_messages_exit_0_all_zero(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_empty_messages_exit_0_all_zero(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         config = self._make_config(tmp_path)
         payload = {"messages": [], "session_id": "empty-session"}
         input_file = tmp_path / "empty.json"
@@ -759,9 +751,7 @@ class TestCLIIngestTranscriptHandoff:
         assert result["export_skipped_reason"] == "no_messages"
         assert "checkpoint_path" not in result
 
-    def test_malformed_json_returns_exit_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_malformed_json_returns_exit_1(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         config = self._make_config(tmp_path)
         input_file = tmp_path / "bad.json"
         input_file.write_text("{not valid json}")
@@ -774,9 +764,7 @@ class TestCLIIngestTranscriptHandoff:
         err = json.loads(captured.err)
         assert err["code"] == "malformed_json"
 
-    def test_missing_messages_key_returns_exit_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_missing_messages_key_returns_exit_1(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         config = self._make_config(tmp_path)
         input_file = tmp_path / "no_messages.json"
         input_file.write_text(json.dumps({"session_id": "x"}))
@@ -789,9 +777,7 @@ class TestCLIIngestTranscriptHandoff:
         err = json.loads(captured.err)
         assert err["code"] == "missing_field"
 
-    def test_unsupported_role_returns_exit_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_unsupported_role_returns_exit_1(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         config = self._make_config(tmp_path)
         payload = {"messages": [{"role": "admin", "content": "hack"}], "session_id": "x"}
         input_file = tmp_path / "bad_role.json"
@@ -805,9 +791,7 @@ class TestCLIIngestTranscriptHandoff:
         err = json.loads(captured.err)
         assert err["code"] == "validation_error"
 
-    def test_empty_message_content_returns_exit_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_empty_message_content_returns_exit_1(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         config = self._make_config(tmp_path)
         payload = {"messages": [{"role": "user", "content": "   "}], "session_id": "x"}
         input_file = tmp_path / "empty_content.json"
@@ -821,9 +805,7 @@ class TestCLIIngestTranscriptHandoff:
         err = json.loads(captured.err)
         assert err["code"] == "validation_error"
 
-    def test_nonexistent_input_file_returns_exit_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_nonexistent_input_file_returns_exit_1(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         config = self._make_config(tmp_path)
         args = make_args(tmp_path, input_arg=str(tmp_path / "does_not_exist.json"))
         exit_code = _run_ingest_transcript_handoff(config, args)
@@ -891,9 +873,7 @@ class TestAdminCommandIntegration:
             neo4j_database="",
         )
 
-    def test_admin_command_routes_to_handoff(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_admin_command_routes_to_handoff(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         config = self._make_config(tmp_path)
         payload = make_transcript_payload(
             [{"role": "user", "content": "We use SQLite for local dev."}, {"role": "assistant", "content": "Noted."}],
@@ -935,13 +915,20 @@ def test_cli_parser_includes_ingest_transcript_handoff() -> None:
     args = parser.parse_args(
         [
             "ingest-transcript-handoff",
-            "--input", "-",
-            "--project", "my-proj",
-            "--agent-id", "agent-1",
-            "--session-id", "sess-1",
-            "--export-format", "markdown",
-            "--max-nodes", "10",
-            "--max-input-bytes", "1000",
+            "--input",
+            "-",
+            "--project",
+            "my-proj",
+            "--agent-id",
+            "agent-1",
+            "--session-id",
+            "sess-1",
+            "--export-format",
+            "markdown",
+            "--max-nodes",
+            "10",
+            "--max-input-bytes",
+            "1000",
         ]
     )
     assert args.command == "ingest-transcript-handoff"

@@ -306,9 +306,7 @@ class PrimeREPL(IsolatedEnv):
         super().__init__(persistent=persistent, depth=depth, **kwargs)
 
         if persistent:
-            raise NotImplementedError(
-                "Persistent REPLs are currently not supported for environment: PrimeREPL"
-            )
+            raise NotImplementedError("Persistent REPLs are currently not supported for environment: PrimeREPL")
 
         self.name = name
         self.docker_image = docker_image
@@ -485,9 +483,7 @@ class PrimeREPL(IsolatedEnv):
 
         elif req_type == "batched":
             prompts = req_data.get("prompts", [])
-            responses = send_lm_request_batched(
-                self.lm_handler_address, prompts, model=model, depth=self.depth
-            )
+            responses = send_lm_request_batched(self.lm_handler_address, prompts, model=model, depth=self.depth)
 
             results = []
             for resp in responses:
@@ -531,9 +527,7 @@ class PrimeREPL(IsolatedEnv):
         )
 
         # Execute the script
-        result = self.client.execute_command(
-            self.sandbox_id, "python /tmp/exec_script.py", timeout=60 * 10
-        )
+        result = self.client.execute_command(self.sandbox_id, "python /tmp/exec_script.py", timeout=60 * 10)
         stdout = result.stdout
         stderr = result.stderr
 

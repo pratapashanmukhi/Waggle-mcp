@@ -75,9 +75,7 @@ class UsageSummary:
     def total_cost(self) -> float | None:
         """Aggregate cost across all models. Returns None if no cost data available."""
         costs = [
-            summary.total_cost
-            for summary in self.model_usage_summaries.values()
-            if summary.total_cost is not None
+            summary.total_cost for summary in self.model_usage_summaries.values() if summary.total_cost is not None
         ]
         return sum(costs) if costs else None
 
@@ -94,8 +92,7 @@ class UsageSummary:
     def to_dict(self):
         result = {
             "model_usage_summaries": {
-                model: usage_summary.to_dict()
-                for model, usage_summary in self.model_usage_summaries.items()
+                model: usage_summary.to_dict() for model, usage_summary in self.model_usage_summaries.items()
             },
         }
         if self.total_cost is not None:
@@ -124,9 +121,7 @@ class RLMChatCompletion:
     response: str
     usage_summary: UsageSummary
     execution_time: float
-    metadata: dict | None = (
-        None  # Full trajectory (run_metadata + iterations) when logger captures it
-    )
+    metadata: dict | None = None  # Full trajectory (run_metadata + iterations) when logger captures it
 
     def to_dict(self):
         out = {
@@ -244,9 +239,7 @@ class RLMMetadata:
             "backend": self.backend,
             "backend_kwargs": {k: _serialize_value(v) for k, v in self.backend_kwargs.items()},
             "environment_type": self.environment_type,
-            "environment_kwargs": {
-                k: _serialize_value(v) for k, v in self.environment_kwargs.items()
-            },
+            "environment_kwargs": {k: _serialize_value(v) for k, v in self.environment_kwargs.items()},
             "other_backends": self.other_backends,
         }
 

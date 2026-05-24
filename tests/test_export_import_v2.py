@@ -84,11 +84,7 @@ def test_import_graph_backup_recreates_context_window_hierarchy(tmp_path: Path) 
     assert len(windows) == 2
     imported_first = target.get_node(first.id)
     assert imported_first.context_window_id == first.context_window_id
-    edge_types = {
-        edge.edge_type
-        for window in windows
-        for edge in target.get_context_window_edges(window.id)
-    }
+    edge_types = {edge.edge_type for window in windows for edge in target.get_context_window_edges(window.id)}
     assert "supersedes" in edge_types
 
 

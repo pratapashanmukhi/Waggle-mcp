@@ -32,9 +32,7 @@ class GeminiClient(BaseLM):
             api_key = DEFAULT_GEMINI_API_KEY
 
         if api_key is None:
-            raise ValueError(
-                "Gemini API key is required. Set GEMINI_API_KEY env var or pass api_key."
-            )
+            raise ValueError("Gemini API key is required. Set GEMINI_API_KEY env var or pass api_key.")
 
         # Configure HTTP options with timeout
         http_options = types.HttpOptions(timeout=int(self.timeout * 1000))  # milliseconds
@@ -71,9 +69,7 @@ class GeminiClient(BaseLM):
         self._track_cost(response, model)
         return response.text
 
-    async def acompletion(
-        self, prompt: str | list[dict[str, Any]], model: str | None = None
-    ) -> str:
+    async def acompletion(self, prompt: str | list[dict[str, Any]], model: str | None = None) -> str:
         contents, system_instruction = self._prepare_contents(prompt)
 
         model = model or self.model_name
@@ -94,9 +90,7 @@ class GeminiClient(BaseLM):
         self._track_cost(response, model)
         return response.text
 
-    def _prepare_contents(
-        self, prompt: str | list[dict[str, Any]]
-    ) -> tuple[list[types.Content] | str, str | None]:
+    def _prepare_contents(self, prompt: str | list[dict[str, Any]]) -> tuple[list[types.Content] | str, str | None]:
         """Prepare contents and extract system instruction for Gemini API."""
         system_instruction = None
 

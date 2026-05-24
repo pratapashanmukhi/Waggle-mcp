@@ -10,8 +10,8 @@ from rlm.utils.exceptions import (
 __all__ = [
     "RLM",
     "BudgetExceededError",
+    "CancellationError",
+    "ErrorThresholdExceededError",
     "TimeoutExceededError",
     "TokenLimitExceededError",
-    "ErrorThresholdExceededError",
-    "CancellationError",
 ]

@@ -46,9 +46,7 @@ class AnthropicClient(BaseLM):
         self._track_cost(response, model)
         return response.content[0].text
 
-    async def acompletion(
-        self, prompt: str | list[dict[str, Any]], model: str | None = None
-    ) -> str:
+    async def acompletion(self, prompt: str | list[dict[str, Any]], model: str | None = None) -> str:
         messages, system = self._prepare_messages(prompt)
 
         model = model or self.model_name
@@ -63,9 +61,7 @@ class AnthropicClient(BaseLM):
         self._track_cost(response, model)
         return response.content[0].text
 
-    def _prepare_messages(
-        self, prompt: str | list[dict[str, Any]]
-    ) -> tuple[list[dict[str, Any]], str | None]:
+    def _prepare_messages(self, prompt: str | list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str | None]:
         """Prepare messages and extract system prompt for Anthropic API."""
         system = None
 

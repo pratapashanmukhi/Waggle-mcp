@@ -4,7 +4,7 @@ import hashlib
 import json
 import sqlite3
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -22,6 +22,7 @@ from waggle.abhi import (
     query_abhi_file,
     write_abhi_document,
 )
+from waggle.errors import ValidationFailure
 from waggle.graph import MemoryGraph
 from waggle.models import NodeType, RelationType
 
@@ -547,7 +548,9 @@ def test_export_import_export_abhi_round_trip_is_stable(tmp_path: Path) -> None:
     assert first["graph"] == second["graph"]
     assert first["embeddings"] == second["embeddings"]
     assert first["waggle"]["tenant_id"] == second["waggle"]["tenant_id"]
-    assert [item["id"] for item in first["waggle"]["context_windows"]] == [item["id"] for item in second["waggle"]["context_windows"]]
+    assert [item["id"] for item in first["waggle"]["context_windows"]] == [
+        item["id"] for item in second["waggle"]["context_windows"]
+    ]
     assert _sha256_file(Path(exported.output_path)) == _sha256_file(Path(reexported.output_path))
 
 
@@ -610,7 +613,7 @@ def test_encrypted_abhi_requires_passphrase_and_round_trips(tmp_path: Path) -> N
         raw_manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
     assert raw_manifest["encryption"]["enabled"] is True
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationFailure):
         load_abhi_document(exported.output_path)
 
     decrypted = load_abhi_document(exported.output_path, passphrase="secret-passphrase")
@@ -704,7 +707,9 @@ def test_execute_abhi_query_matches_recent_and_filtered_nodes(tmp_path: Path) ->
     exported = graph.export_abhi(output_path=tmp_path / "memory.abhi", project="studio")
     document = load_abhi_document(exported.output_path)
 
-    filtered = execute_abhi_query(document, query_text="FIND nodes WHERE type='decision' AND content CONTAINS 'database'")
+    filtered = execute_abhi_query(
+        document, query_text="FIND nodes WHERE type='decision' AND content CONTAINS 'database'"
+    )
     recent = execute_abhi_query(document, query_id="q1")
 
     assert len(filtered["nodes"]) == 1
@@ -765,7 +770,7 @@ def test_query_abhi_file_updates_event_log_and_relevance_hits(tmp_path: Path) ->
     exported = graph.export_abhi(output_path=tmp_path / "memory.abhi", project="studio")
 
     result = query_abhi_file(input_path=exported.output_path, query_text="FIND nodes WHERE type='decision'")
-    document = load_abhi_document(exported.output_path)
+    load_abhi_document(exported.output_path)
     assert result.node_count == 1
     assert "queried_abhi" in result.executed_actions
 
@@ -1036,7 +1041,7 @@ def test_query_fusion_mode_includes_graph_and_replay_provenance(tmp_path: Path) 
 
 def test_query_graph_mode_uses_transcript_session_signal_for_node_ranking(tmp_path: Path) -> None:
     graph = make_graph(tmp_path)
-    timestamp = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    timestamp = datetime(2024, 1, 1, tzinfo=UTC)
     node_a = graph.add_node(
         label="Session A Note",
         content="Shared planning note.",
@@ -1059,7 +1064,7 @@ def test_query_graph_mode_uses_transcript_session_signal_for_node_ranking(tmp_pa
         session_id="sess-a",
         project="alpha",
         transcript_text="We chose PostgreSQL for production.",
-        observed_at=datetime(2024, 2, 1, tzinfo=timezone.utc),
+        observed_at=datetime(2024, 2, 1, tzinfo=UTC),
     )
 
     result = graph.query(
@@ -1078,7 +1083,7 @@ def test_query_graph_mode_uses_transcript_session_signal_for_node_ranking(tmp_pa
 
 def test_prime_context_prefers_nodes_from_recent_transcript_sessions(tmp_path: Path) -> None:
     graph = make_graph(tmp_path)
-    timestamp = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    timestamp = datetime(2024, 1, 1, tzinfo=UTC)
     active = graph.add_node(
         label="Active Session Decision",
         content="Shared context note.",
@@ -1103,7 +1108,7 @@ def test_prime_context_prefers_nodes_from_recent_transcript_sessions(tmp_path: P
         session_id="sess-active",
         project="alpha",
         transcript_text="We are actively working on the rollout plan today.",
-        observed_at=datetime(2024, 2, 1, tzinfo=timezone.utc),
+        observed_at=datetime(2024, 2, 1, tzinfo=UTC),
     )
 
     result = graph.prime_context(project="alpha", max_nodes=2)
@@ -1114,7 +1119,7 @@ def test_prime_context_prefers_nodes_from_recent_transcript_sessions(tmp_path: P
 
 def test_prime_context_ignores_non_embeddable_seed_nodes(tmp_path: Path) -> None:
     graph = make_graph(tmp_path)
-    timestamp = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    timestamp = datetime(2024, 1, 1, tzinfo=UTC)
     seed = graph.add_node(
         label="Non-Embeddable Seed",
         content="This node should be ignored during prime context expansion.",
@@ -1192,8 +1197,7 @@ def test_markdown_vault_export_and_import_round_trip(tmp_path: Path) -> None:
         "We decided to use PostgreSQL 16 for production.",
     )
     updated_text = updated_text.replace(
-        "## Relations\n- [[depends_on::Need ACID]] <!-- node_id:"
-        f"{reason.id} -->",
+        f"## Relations\n- [[depends_on::Need ACID]] <!-- node_id:{reason.id} -->",
         "## Relations\n"
         f"- [[depends_on::Need ACID]] <!-- node_id:{reason.id} -->\n"
         "- [[relates_to::Operational Runbook]]",
@@ -1263,7 +1267,7 @@ def test_conflict_detection_creates_contradiction_edge(tmp_path: Path) -> None:
 
 def test_conflict_detection_skips_meta_policy_example_nodes(tmp_path: Path) -> None:
     graph = make_graph(tmp_path)
-    first = graph.add_node(
+    graph.add_node(
         label="Hedged statements policy",
         content='Hedged or conditional turns such as "I think we should probably go with Redis" are stored as note nodes instead of hard decisions.',
         node_type=NodeType.DECISION,
@@ -1372,8 +1376,7 @@ def test_observe_conversation_links_entity_mentions_within_turn(tmp_path: Path) 
     related = graph.get_related(node_id=decision_node.id, max_depth=1)
 
     assert any(
-        edge.relationship == RelationType.RELATES_TO and edge.target_id == path_node.id
-        for edge in related.edges
+        edge.relationship == RelationType.RELATES_TO and edge.target_id == path_node.id for edge in related.edges
     )
 
 
@@ -1429,7 +1432,7 @@ def test_observe_conversation_extracts_common_preference_and_decision_phrasings(
 def test_duplicate_nodes_accumulate_evidence_records(tmp_path: Path) -> None:
     graph = make_graph(tmp_path)
 
-    first = graph.observe_conversation(
+    graph.observe_conversation(
         user_message="We chose PostgreSQL for production.",
         assistant_response="Understood.",
     )
@@ -1652,8 +1655,7 @@ def test_observe_conversation_extracts_causal_fact_and_decision_with_dependency_
     assert decision_node.content == "we dropped the GraphQL migration."
     related = graph.get_related(node_id=decision_node.id, max_depth=1)
     assert any(
-        edge.relationship == RelationType.DEPENDS_ON and edge.target_id == fact_node.id
-        for edge in related.edges
+        edge.relationship == RelationType.DEPENDS_ON and edge.target_id == fact_node.id for edge in related.edges
     )
 
 
@@ -1730,8 +1732,12 @@ def test_query_supports_temporal_latest_and_oldest_bias(tmp_path: Path) -> None:
         node_type=NodeType.CONCEPT,
     )
 
-    latest = graph.query(query="latest auth architecture", max_nodes=1, max_depth=0, retrieval_mode="graph")  # Benchmark
-    originally = graph.query(query="originally auth architecture", max_nodes=1, max_depth=0, retrieval_mode="graph")  # Benchmark
+    latest = graph.query(
+        query="latest auth architecture", max_nodes=1, max_depth=0, retrieval_mode="graph"
+    )  # Benchmark
+    originally = graph.query(
+        query="originally auth architecture", max_nodes=1, max_depth=0, retrieval_mode="graph"
+    )  # Benchmark
 
     assert latest.nodes[0].label == "Auth v2"
     assert originally.nodes[0].label == "Auth v1"
@@ -2038,11 +2044,12 @@ def test_observe_conversation_round_trip_stamps_transcript_embeddings_and_turn_p
 
 def test_observe_conversation_rolls_back_transcript_rows_on_extraction_failure(tmp_path: Path) -> None:
     """Test that with verbatim-first architecture, extraction failures don't prevent verbatim storage.
-    
+
     CHANGED: This test now verifies the new behavior where verbatim turns are stored even
     when candidate application fails. The old behavior (rollback on extraction failure)
     was replaced with the new requirement: verbatim storage is MANDATORY and non-fatal.
     """
+
     class ExplodingGraph(MemoryGraph):
         def _apply_observation_candidates(self, **kwargs: object) -> object:  # type: ignore[override]
             raise RuntimeError("boom")
@@ -2056,7 +2063,7 @@ def test_observe_conversation_rolls_back_transcript_rows_on_extraction_failure(t
         session_id="atomicity",
         project="audit",
     )
-    
+
     # Verify verbatim was stored despite extraction failure
     assert result.verbatim_stored is True
     assert "boom" in result.extraction_errors[0]
@@ -2112,7 +2119,9 @@ def test_abhi_round_trip_200_turn_graph_preserves_query_results(tmp_path: Path) 
     assert after.nodes
     assert before.nodes[0].content == after.nodes[0].content
 
-    reexported = restored.export_abhi(output_path=tmp_path / "roundtrip-reexport.abhi", project="roundtrip", include_embeddings=True)
+    reexported = restored.export_abhi(
+        output_path=tmp_path / "roundtrip-reexport.abhi", project="roundtrip", include_embeddings=True
+    )
     first_doc = load_abhi_document(exported.output_path)
     second_doc = load_abhi_document(reexported.output_path)
 
@@ -2128,6 +2137,7 @@ def test_abhi_round_trip_200_turn_graph_preserves_query_results(tmp_path: Path) 
 # ---------------------------------------------------------------------------
 # Magic-byte format detection tests
 # ---------------------------------------------------------------------------
+
 
 def _minimal_snapshot() -> dict:
     """Return the smallest valid snapshot that write_abhi_document will accept."""
@@ -2147,9 +2157,7 @@ def test_abhi_v1_file_starts_with_magic_bytes(tmp_path: Path) -> None:
     """Files written by write_abhi_document must start with the WGL\\x01 magic."""
     out = tmp_path / "test.abhi"
     write_abhi_document(_minimal_snapshot(), output_path=out)
-    assert out.read_bytes()[:4] == ABHI_MAGIC, (
-        "Expected WGL\\x01 magic bytes at the start of the exported file"
-    )
+    assert out.read_bytes()[:4] == ABHI_MAGIC, "Expected WGL\\x01 magic bytes at the start of the exported file"
 
 
 def test_abhi_v1_file_round_trips_through_load(tmp_path: Path) -> None:
@@ -2164,13 +2172,14 @@ def test_abhi_legacy_v0_bare_zip_still_loads(tmp_path: Path, caplog) -> None:
     """A bare ZIP file (v0, no magic bytes) must still load for backwards compat
     and emit a deprecation warning via the logger."""
     import zipfile as _zf
+
     from waggle.abhi import (
+        ABHI_CONTEXT_WINDOWS_MEMBER,
+        ABHI_EDGES_MEMBER,
         ABHI_MANIFEST_MEMBER,
         ABHI_NODES_MEMBER,
-        ABHI_EDGES_MEMBER,
-        ABHI_TRANSCRIPTS_MEMBER,
-        ABHI_CONTEXT_WINDOWS_MEMBER,
         ABHI_SPEC_VERSION,
+        ABHI_TRANSCRIPTS_MEMBER,
         _canonical_json,
         _deterministic_zip_info,
     )
@@ -2207,6 +2216,7 @@ def test_abhi_legacy_v0_bare_zip_still_loads(tmp_path: Path, caplog) -> None:
         arc.writestr(_deterministic_zip_info(ABHI_MANIFEST_MEMBER), _canonical_json(manifest))
 
     import logging
+
     with caplog.at_level(logging.WARNING, logger="waggle.abhi"):
         doc = load_abhi_document(out)
 
@@ -2221,8 +2231,8 @@ def test_abhi_corrupted_magic_raises_validation_failure(tmp_path: Path) -> None:
     from waggle.errors import ValidationFailure as VF
 
     bad = tmp_path / "bad.abhi"
-    bad.write_bytes(b"\xDE\xAD\xBE\xEF" + b"not a zip at all")
-    with pytest.raises(VF, match="not a valid .abhi file"):
+    bad.write_bytes(b"\xde\xad\xbe\xef" + b"not a zip at all")
+    with pytest.raises(VF, match=r"not a valid \.abhi file"):
         load_abhi_document(bad)
 
 
@@ -2242,5 +2252,5 @@ def test_abhi_json_file_raises_validation_failure(tmp_path: Path) -> None:
 
     json_file = tmp_path / "old.abhi"
     json_file.write_text('{"graph": {}}', encoding="utf-8")
-    with pytest.raises(VF, match="not a valid .abhi file"):
+    with pytest.raises(VF, match=r"not a valid \.abhi file"):
         load_abhi_document(json_file)

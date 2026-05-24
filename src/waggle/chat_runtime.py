@@ -243,12 +243,20 @@ class OrchestratedChatRuntime:
         prime_context: PrimeContextResult | None,
     ) -> bool:
         if context is not None and (
-            getattr(context, "nodes", None) or getattr(context, "replay_hits", None) or getattr(context, "fusion_hits", None) or getattr(context, "hybrid_hits", None)
-            or (isinstance(context, dict) and any(context.get(key) for key in ("nodes", "replay_hits", "fusion_hits", "hybrid_hits")))
+            getattr(context, "nodes", None)
+            or getattr(context, "replay_hits", None)
+            or getattr(context, "fusion_hits", None)
+            or getattr(context, "hybrid_hits", None)
+            or (
+                isinstance(context, dict)
+                and any(context.get(key) for key in ("nodes", "replay_hits", "fusion_hits", "hybrid_hits"))
+            )
         ):
             return True
-        if prime_context is not None and (
-            getattr(prime_context, "nodes", None) or (isinstance(prime_context, dict) and prime_context.get("nodes"))
-        ):
-            return True
-        return False
+        return bool(
+            prime_context is not None
+            and (
+                getattr(prime_context, "nodes", None)
+                or (isinstance(prime_context, dict) and prime_context.get("nodes"))
+            )
+        )

@@ -7,7 +7,7 @@ import statistics
 import tempfile
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +17,6 @@ from waggle.embeddings import EmbeddingModel
 from waggle.graph import MemoryGraph
 from waggle.intelligence import lexical_overlap
 from waggle.models import NodeType, RelationType
-
 
 DEFAULT_PROJECT = "token-efficiency-benchmark"
 DEFAULT_WAGGLE_TOP_K = 5
@@ -315,9 +314,7 @@ def _quoted_phrase_score(question: str, content: str) -> float:
 
 def _term_coverage_score(question: str, content: str) -> float:
     query_terms = {
-        token.strip(".,?!:;()[]{}\"'").lower()
-        for token in question.split()
-        if len(token.strip(".,?!:;()[]{}\"'")) >= 4
+        token.strip(".,?!:;()[]{}\"'").lower() for token in question.split() if len(token.strip(".,?!:;()[]{}\"'")) >= 4
     }
     if not query_terms:
         return 0.0
@@ -417,11 +414,23 @@ def _generate_transcript(title: str, evidence_lines: list[str], *, noise_blocks:
 
 
 def generate_default_dataset(path: Path) -> Path:
-    base_time = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)
+    base_time = datetime(2026, 1, 1, 9, 0, tzinfo=UTC)
     domain_specs = [
         ("database", "SQLite local only", "PostgreSQL production", "safer migrations and parity", "analytics joins"),
-        ("auth", "JWT expires in 15 minutes", "JWT expires in 1 hour", "reduce support lockouts", "mobile refresh flow"),
-        ("cache", "Redis cache disabled in prod", "Redis cache enabled in prod", "cut API latency", "search autosuggest"),
+        (
+            "auth",
+            "JWT expires in 15 minutes",
+            "JWT expires in 1 hour",
+            "reduce support lockouts",
+            "mobile refresh flow",
+        ),
+        (
+            "cache",
+            "Redis cache disabled in prod",
+            "Redis cache enabled in prod",
+            "cut API latency",
+            "search autosuggest",
+        ),
         ("search", "Meilisearch for staging", "OpenSearch for production", "better faceting", "catalog navigation"),
         ("billing", "manual invoice review", "automatic invoice review", "reduce finance backlog", "renewal reminders"),
         ("support", "email-only intake", "portal-based intake", "triage SLA", "priority routing"),
@@ -596,12 +605,10 @@ def _build_rag_chunks(
 ) -> list[RagChunk]:
     chunks: list[RagChunk] = []
     for conversation in conversations:
-        for index, chunk_text_value in enumerate(chunk_text(conversation.transcript, chunk_size=chunk_size, overlap=overlap)):
-            support_fact_ids = [
-                fact.id
-                for fact in conversation.facts
-                if fact.evidence_text in chunk_text_value
-            ]
+        for index, chunk_text_value in enumerate(
+            chunk_text(conversation.transcript, chunk_size=chunk_size, overlap=overlap)
+        ):
+            support_fact_ids = [fact.id for fact in conversation.facts if fact.evidence_text in chunk_text_value]
             chunks.append(
                 RagChunk(
                     chunk_id=f"{conversation.id}::chunk{index}",
@@ -705,7 +712,7 @@ def _build_graph(
         dedup_similarity_threshold=1.01,
         dedup_same_label_threshold=1.01,
     )
-    setattr(graph, "_benchmark_tmpdir", tmpdir)
+    graph._benchmark_tmpdir = tmpdir
     fact_node_ids: dict[str, str] = {}
 
     for conversation in conversations:
@@ -768,16 +775,28 @@ def _summarize_results(
     return SystemSummary(
         system=system,
         avg_input_tokens_per_query=statistics.mean(result.input_tokens for result in results) if results else 0.0,
-        avg_retrieved_context_tokens=statistics.mean(result.retrieved_context_tokens for result in results) if results else 0.0,
+        avg_retrieved_context_tokens=statistics.mean(result.retrieved_context_tokens for result in results)
+        if results
+        else 0.0,
         avg_rerank_tokens=statistics.mean(result.rerank_tokens for result in results) if results else 0.0,
         avg_total_token_cost=statistics.mean(result.total_token_cost for result in results) if results else 0.0,
         recall_at_k=(sum(1 if result.hit_at_k else 0 for result in results) / len(results)) if results else 0.0,
-        multi_hop_accuracy=(sum(1 if result.exact_support else 0 for result in multi_hop) / len(multi_hop)) if multi_hop else 0.0,
-        extraction_failure_recall=(sum(1 if result.hit_at_k else 0 for result in extraction_failure) / len(extraction_failure)) if extraction_failure else 0.0,
+        multi_hop_accuracy=(sum(1 if result.exact_support else 0 for result in multi_hop) / len(multi_hop))
+        if multi_hop
+        else 0.0,
+        extraction_failure_recall=(
+            sum(1 if result.hit_at_k else 0 for result in extraction_failure) / len(extraction_failure)
+        )
+        if extraction_failure
+        else 0.0,
         latency_p50_seconds=_percentile([result.latency_seconds for result in results], 0.50),
         latency_p95_seconds=_percentile([result.latency_seconds for result in results], 0.95),
-        avg_node_count=(statistics.mean(result.node_count for result in results) if include_graph_shape and results else None),
-        avg_edge_count=(statistics.mean(result.edge_count for result in results) if include_graph_shape and results else None),
+        avg_node_count=(
+            statistics.mean(result.node_count for result in results) if include_graph_shape and results else None
+        ),
+        avg_edge_count=(
+            statistics.mean(result.edge_count for result in results) if include_graph_shape and results else None
+        ),
         metadata=metadata or {},
     )
 
@@ -875,7 +894,9 @@ def run_benchmark(
 
     graph, _ = _build_graph(conversations, embedding_model=waggle_embedding, project=project)
     chunks = _build_rag_chunks(conversations, chunk_size=rag_chunk_size, overlap=rag_chunk_overlap)
-    chunk_embeddings = rag_embedding.embed_batch([chunk.text for chunk in chunks]) if chunks else np.empty((0, 0), dtype=np.float32)
+    chunk_embeddings = (
+        rag_embedding.embed_batch([chunk.text for chunk in chunks]) if chunks else np.empty((0, 0), dtype=np.float32)
+    )
 
     waggle_results: list[QueryResult] = []
     rag_results: list[QueryResult] = []
@@ -896,10 +917,7 @@ def run_benchmark(
         )
         waggle_latency = time.perf_counter() - started
         waggle_ids = [
-            tag.split(":", 1)[1]
-            for node in subgraph.nodes
-            for tag in node.tags
-            if tag.startswith("fact_id:")
+            tag.split(":", 1)[1] for node in subgraph.nodes for tag in node.tags if tag.startswith("fact_id:")
         ]
         waggle_context = _serialize_waggle_context(subgraph.nodes, subgraph.edges)
         waggle_hit, waggle_exact = _query_matches_context(query, waggle_context)
@@ -955,7 +973,11 @@ def run_benchmark(
         "waggle_graph",
         waggle_results,
         include_graph_shape=True,
-        metadata={"avg_subgraph_nodes": statistics.mean(result.node_count for result in waggle_results) if waggle_results else 0.0},
+        metadata={
+            "avg_subgraph_nodes": statistics.mean(result.node_count for result in waggle_results)
+            if waggle_results
+            else 0.0
+        },
     )
     rag_summary = _summarize_results(
         "vanilla_rag",
@@ -1012,12 +1034,25 @@ def run_comparison_benchmark(
     waggle_embedding = EmbeddingModel(local_fallback_embedding_model_name)
     graph, _ = _build_graph(conversations, embedding_model=waggle_embedding, project=project)
     chunks = _build_rag_chunks(conversations, chunk_size=DEFAULT_RAG_CHUNK_SIZE, overlap=DEFAULT_RAG_CHUNK_OVERLAP)
-    chunk_embeddings = waggle_embedding.embed_batch([chunk.text for chunk in chunks]) if chunks else np.empty((0, 0), dtype=np.float32)
+    chunk_embeddings = (
+        waggle_embedding.embed_batch([chunk.text for chunk in chunks]) if chunks else np.empty((0, 0), dtype=np.float32)
+    )
 
     configs = [
-        RetrievalConfig(id="old", label="Old", retrieval_mode="graph", max_depth=2, expand_depth=0, rerank_enabled=False),
-        RetrievalConfig(id="new_no_rerank", label="New-no-rerank", retrieval_mode="hybrid", max_depth=2, expand_depth=0, rerank_enabled=False),
-        RetrievalConfig(id="new_full", label="New-full", retrieval_mode="hybrid", max_depth=2, expand_depth=0, rerank_enabled=True),
+        RetrievalConfig(
+            id="old", label="Old", retrieval_mode="graph", max_depth=2, expand_depth=0, rerank_enabled=False
+        ),
+        RetrievalConfig(
+            id="new_no_rerank",
+            label="New-no-rerank",
+            retrieval_mode="hybrid",
+            max_depth=2,
+            expand_depth=0,
+            rerank_enabled=False,
+        ),
+        RetrievalConfig(
+            id="new_full", label="New-full", retrieval_mode="hybrid", max_depth=2, expand_depth=0, rerank_enabled=True
+        ),
     ]
 
     per_query: dict[str, list[QueryResult]] = {}
@@ -1067,10 +1102,7 @@ def run_comparison_benchmark(
                 exact_support=exact_support,
                 latency_seconds=latency,
                 retrieved_ids=[
-                    tag.split(":", 1)[1]
-                    for node in subgraph.nodes
-                    for tag in node.tags
-                    if tag.startswith("fact_id:")
+                    tag.split(":", 1)[1] for node in subgraph.nodes for tag in node.tags if tag.startswith("fact_id:")
                 ],
                 retrieval_mode=config.retrieval_mode,
                 node_count=len(subgraph.nodes),
@@ -1097,7 +1129,9 @@ def run_comparison_benchmark(
             },
         )
         if summaries[config.id].multi_hop_accuracy < 0.30:
-            failures = [result for result in config_results if result.kind == "multi_hop" and not result.exact_support][:3]
+            failures = [result for result in config_results if result.kind == "multi_hop" and not result.exact_support][
+                :3
+            ]
             failing_multi_hop_traces[config.id] = [
                 {
                     "query_id": failure.query_id,
@@ -1106,17 +1140,28 @@ def run_comparison_benchmark(
                 for failure in failures
             ]
 
-    notes.append("Hybrid modes use graph retrieval plus transcript chunk retrieval. `New-full` adds heuristic reranking over the first-pass chunk pool.")
+    notes.append(
+        "Hybrid modes use graph retrieval plus transcript chunk retrieval. `New-full` adds heuristic reranking over the first-pass chunk pool."
+    )
     if allow_local_baseline_fallback:
-        notes.append(f"Benchmark used local embeddings `{local_fallback_embedding_model_name}` for graph and transcript chunk ranking.")
+        notes.append(
+            f"Benchmark used local embeddings `{local_fallback_embedding_model_name}` for graph and transcript chunk ranking."
+        )
     expected_checks = [
         (
             "Single-fact recall",
             subset_breakdowns["new_full"]["single_fact"]["recall_at_k"] >= 0.95
             and 0.75 <= subset_breakdowns["old"]["single_fact"]["recall_at_k"] <= 0.90,
         ),
-        ("Multi-hop accuracy", summaries["new_full"].multi_hop_accuracy >= 0.40 and summaries["old"].multi_hop_accuracy == 0.0),
-        ("Extraction-failure recall", summaries["new_full"].extraction_failure_recall >= 0.90 and summaries["old"].extraction_failure_recall <= 0.05),
+        (
+            "Multi-hop accuracy",
+            summaries["new_full"].multi_hop_accuracy >= 0.40 and summaries["old"].multi_hop_accuracy == 0.0,
+        ),
+        (
+            "Extraction-failure recall",
+            summaries["new_full"].extraction_failure_recall >= 0.90
+            and summaries["old"].extraction_failure_recall <= 0.05,
+        ),
         ("Latency target", 0.10 <= summaries["new_full"].latency_p50_seconds <= 0.18),
     ]
     for label, passed in expected_checks:
@@ -1237,7 +1282,7 @@ def build_markdown_report(report: BenchmarkReport) -> str:
         "",
         "## Waggle Retrieval Policy",
         "",
-        f"- `retrieval_mode=graph`",
+        "- `retrieval_mode=graph`",
         f"- `max_nodes={report.waggle_config['max_nodes']}`",
         f"- `max_depth={report.waggle_config['max_depth']}`",
         f"- `expand_depth={report.waggle_config['expand_depth']}`",

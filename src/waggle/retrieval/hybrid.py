@@ -3,16 +3,16 @@ from __future__ import annotations
 import json
 import math
 import os
-import sqlite3
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Callable
+from datetime import UTC, datetime
+from typing import Any
 
 import numpy as np
 
-from waggle.intelligence import normalize_text, tokenize_text
-from waggle.models import Edge, HybridHit, Node, RelationType, ReplayHit
+from waggle.intelligence import tokenize_text
+from waggle.models import HybridHit, RelationType
 from waggle.rlm import run_gemini_one_shot, run_groq_one_shot, run_ollama_one_shot
 
 RRF_K = 60.0
@@ -118,8 +118,8 @@ def _rrf(rank: int) -> float:
 def _age_days(timestamp: datetime | None, *, now: datetime) -> float:
     if timestamp is None:
         return 0.0
-    normalized = timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=timezone.utc)
-    return max((now - normalized.astimezone(timezone.utc)).total_seconds() / 86400.0, 0.0)
+    normalized = timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=UTC)
+    return max((now - normalized.astimezone(UTC)).total_seconds() / 86400.0, 0.0)
 
 
 def _recency_decay(age_days: float, half_life_days: float) -> float:
@@ -140,11 +140,7 @@ class SimpleBM25:
     def __init__(self, documents: dict[str, list[str]]) -> None:
         self.documents = documents
         self.doc_count = len(documents)
-        self.avgdl = (
-            sum(len(tokens) for tokens in documents.values()) / self.doc_count
-            if self.doc_count
-            else 0.0
-        )
+        self.avgdl = sum(len(tokens) for tokens in documents.values()) / self.doc_count if self.doc_count else 0.0
         self.doc_freq: Counter[str] = Counter()
         self.term_freqs: dict[str, Counter[str]] = {}
         for doc_id, tokens in documents.items():
@@ -224,13 +220,30 @@ class HybridRetriever:
             raise ValueError("HybridRetriever mode must be 'hybrid' or 'verbatim'.")
 
         turn_pairs = self._load_turn_pairs(project=project, agent_id=agent_id, session_id=session_id)
-        query_embedding = self.graph.embedding_model.embed(self.graph._expand_query_aliases(query))  # noqa: SLF001
-        now = datetime.now(timezone.utc)
+        query_embedding = self.graph.embedding_model.embed(self.graph._expand_query_aliases(query))
+        now = datetime.now(UTC)
 
         transcript_vector_ranked = self._rank_turn_pairs(query_embedding, turn_pairs)[:20]
-        node_vector_ranked = [] if normalized_mode == "verbatim" else self._rank_nodes(query_embedding, project=project, agent_id=agent_id, session_id=session_id)[:20]
-        lexical_ranked = self._rank_lexical(query=query, turn_pairs=turn_pairs, project=project, agent_id=agent_id, session_id=session_id, include_nodes=normalized_mode != "verbatim")[:20]
-        graph_expanded_ranked = [] if normalized_mode == "verbatim" else self._expand_graph_candidates(node_vector_ranked, turn_pairs_by_id={pair.turn_pair_id: pair for pair in turn_pairs})[:20]
+        node_vector_ranked = (
+            []
+            if normalized_mode == "verbatim"
+            else self._rank_nodes(query_embedding, project=project, agent_id=agent_id, session_id=session_id)[:20]
+        )
+        lexical_ranked = self._rank_lexical(
+            query=query,
+            turn_pairs=turn_pairs,
+            project=project,
+            agent_id=agent_id,
+            session_id=session_id,
+            include_nodes=normalized_mode != "verbatim",
+        )[:20]
+        graph_expanded_ranked = (
+            []
+            if normalized_mode == "verbatim"
+            else self._expand_graph_candidates(
+                node_vector_ranked, turn_pairs_by_id={pair.turn_pair_id: pair for pair in turn_pairs}
+            )[:20]
+        )
 
         unified = self._fuse_candidates(
             transcript_vector_ranked=transcript_vector_ranked,
@@ -278,7 +291,7 @@ class HybridRetriever:
         }
 
     def _load_turn_pairs(self, *, project: str, agent_id: str, session_id: str) -> list[TurnPairCandidate]:
-        with self.graph._lock, self.graph._connect() as connection:  # noqa: SLF001
+        with self.graph._lock, self.graph._connect() as connection:
             filters = ["tenant_id = ?"]
             params: list[Any] = [self.graph.tenant_id]
             if project.strip():
@@ -303,11 +316,11 @@ class HybridRetriever:
 
         grouped: dict[str, list[Any]] = defaultdict(list)
         for row in rows:
-            record = self.graph._row_to_transcript_record(row)  # noqa: SLF001
+            record = self.graph._row_to_transcript_record(row)
             turn_pair_id = str(record.turn_pair_id or "").strip()
             if not turn_pair_id:
                 turn_pair_id = f"{record.session_id or 'session'}:{record.turn_index}"
-            grouped[turn_pair_id].append((record, self.graph.embedding_model.from_bytes(row["embedding"])))  # noqa: SLF001
+            grouped[turn_pair_id].append((record, self.graph.embedding_model.from_bytes(row["embedding"])))
 
         pairs: list[TurnPairCandidate] = []
         for turn_pair_id, items in grouped.items():
@@ -330,12 +343,16 @@ class HybridRetriever:
             )
         return pairs
 
-    def _rank_turn_pairs(self, query_embedding: np.ndarray, turn_pairs: list[TurnPairCandidate]) -> list[CandidateMemory]:
+    def _rank_turn_pairs(
+        self, query_embedding: np.ndarray, turn_pairs: list[TurnPairCandidate]
+    ) -> list[CandidateMemory]:
         ranked: list[CandidateMemory] = []
         for pair in turn_pairs:
             if not pair.embeddings:
                 continue
-            semantic = max(_cosine(query_embedding, embedding, self.graph.embedding_model) for embedding in pair.embeddings)  # noqa: SLF001
+            semantic = max(
+                _cosine(query_embedding, embedding, self.graph.embedding_model) for embedding in pair.embeddings
+            )
             ranked.append(
                 CandidateMemory(
                     candidate_id=f"tp:{pair.turn_pair_id}",
@@ -350,8 +367,10 @@ class HybridRetriever:
         ranked.sort(key=lambda item: item.layer_scores["vector_transcript"], reverse=True)
         return ranked
 
-    def _rank_nodes(self, query_embedding: np.ndarray, *, project: str, agent_id: str, session_id: str) -> list[CandidateMemory]:
-        with self.graph._lock, self.graph._connect() as connection:  # noqa: SLF001
+    def _rank_nodes(
+        self, query_embedding: np.ndarray, *, project: str, agent_id: str, session_id: str
+    ) -> list[CandidateMemory]:
+        with self.graph._lock, self.graph._connect() as connection:
             filters = ["tenant_id = ?", "embedding IS NOT NULL"]
             params: list[Any] = [self.graph.tenant_id]
             if project.strip():
@@ -375,8 +394,10 @@ class HybridRetriever:
             ).fetchall()
         ranked: list[CandidateMemory] = []
         for row in rows:
-            node = self.graph._row_to_node(row)  # noqa: SLF001
-            semantic = _cosine(query_embedding, self.graph.embedding_model.from_bytes(row["embedding"]), self.graph.embedding_model)  # noqa: SLF001
+            node = self.graph._row_to_node(row)
+            semantic = _cosine(
+                query_embedding, self.graph.embedding_model.from_bytes(row["embedding"]), self.graph.embedding_model
+            )
             ranked.append(
                 CandidateMemory(
                     candidate_id=f"node:{node.id}",
@@ -415,7 +436,7 @@ class HybridRetriever:
                 observed_at=pair.observed_at,
             )
         if include_nodes:
-            with self.graph._lock, self.graph._connect() as connection:  # noqa: SLF001
+            with self.graph._lock, self.graph._connect() as connection:
                 filters = ["tenant_id = ?"]
                 params: list[Any] = [self.graph.tenant_id]
                 if project.strip():
@@ -438,7 +459,7 @@ class HybridRetriever:
                     tuple(params),
                 ).fetchall()
             for row in rows:
-                node = self.graph._row_to_node(row)  # noqa: SLF001
+                node = self.graph._row_to_node(row)
                 doc_id = f"node:{node.id}"
                 documents[doc_id] = list(tokenize_text(f"{node.label} {node.content}"))
                 payloads[doc_id] = CandidateMemory(
@@ -470,7 +491,7 @@ class HybridRetriever:
         seed_node_ids = [candidate.node_ids[0] for candidate in ranked_nodes if candidate.node_ids]
         if not seed_node_ids:
             return []
-        with self.graph._lock, self.graph._connect() as connection:  # noqa: SLF001
+        with self.graph._lock, self.graph._connect() as connection:
             edge_rows = connection.execute(
                 """
                 SELECT id, tenant_id, source_id, target_id, relationship, weight, metadata, created_at
@@ -481,12 +502,14 @@ class HybridRetriever:
             ).fetchall()
         adjacency: dict[str, set[str]] = defaultdict(set)
         for row in edge_rows:
-            edge = self.graph._row_to_edge(row)  # noqa: SLF001
+            edge = self.graph._row_to_edge(row)
             adjacency[edge.source_id].add(edge.target_id)
             adjacency[edge.target_id].add(edge.source_id)
 
         ranked: list[CandidateMemory] = []
-        seed_rank_map = {candidate.node_ids[0]: index for index, candidate in enumerate(ranked_nodes, start=1) if candidate.node_ids}
+        seed_rank_map = {
+            candidate.node_ids[0]: index for index, candidate in enumerate(ranked_nodes, start=1) if candidate.node_ids
+        }
         for seed_id in seed_node_ids:
             visited = {seed_id}
             frontier = {seed_id}
@@ -502,7 +525,7 @@ class HybridRetriever:
                     break
             if len(visited) <= 1:
                 continue
-            with self.graph._lock, self.graph._connect() as connection:  # noqa: SLF001
+            with self.graph._lock, self.graph._connect() as connection:
                 node_rows = connection.execute(
                     f"""
                     SELECT id, agent_id, project, session_id, context_window_id, label, content, node_type, tags, source_prompt,
@@ -513,7 +536,7 @@ class HybridRetriever:
                     """,
                     (self.graph.tenant_id, *visited),
                 ).fetchall()
-            nodes_by_id = {row["id"]: self.graph._row_to_node(row) for row in node_rows}  # noqa: SLF001
+            nodes_by_id = {row["id"]: self.graph._row_to_node(row) for row in node_rows}
             visited_nodes = [nodes_by_id[node_id] for node_id in visited if node_id in nodes_by_id]
             turn_pair_id = next((node.source_turn_pair_id for node in visited_nodes if node.source_turn_pair_id), "")
             transcript_text = turn_pairs_by_id[turn_pair_id].transcript_text if turn_pair_id in turn_pairs_by_id else ""
@@ -575,7 +598,9 @@ class HybridRetriever:
                 existing.node_ids = sorted(set(existing.node_ids + candidate.node_ids))
                 if existing.source != candidate.source:
                     existing.source = "both" if {existing.source, candidate.source} != {"node"} else "node"
-                if existing.observed_at is None or (candidate.observed_at is not None and candidate.observed_at > existing.observed_at):
+                if existing.observed_at is None or (
+                    candidate.observed_at is not None and candidate.observed_at > existing.observed_at
+                ):
                     existing.observed_at = candidate.observed_at
             return existing
 
@@ -597,7 +622,8 @@ class HybridRetriever:
             decay = _recency_decay(age_days, self.config.recency_half_life_days)
             item.layer_scores["recency"] = decay
             fused = (
-                self.config.vector_weight * (item.layer_scores.get("vector_transcript", 0.0) + item.layer_scores.get("vector_node", 0.0))
+                self.config.vector_weight
+                * (item.layer_scores.get("vector_transcript", 0.0) + item.layer_scores.get("vector_node", 0.0))
                 + self.config.bm25_weight * item.layer_scores.get("bm25", 0.0)
                 + self.config.graph_weight * item.layer_scores.get("graph_expansion", 0.0)
             )

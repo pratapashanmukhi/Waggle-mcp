@@ -22,11 +22,7 @@ def get_default_image() -> modal.Image:
     Build a default Modal image with common libraries for data science,
     math, and general Python work.
     """
-    return (
-        modal.Image.debian_slim(python_version="3.11")
-        .apt_install(*APT_PACKAGES)
-        .pip_install(*PIP_PACKAGES)
-    )
+    return modal.Image.debian_slim(python_version="3.11").apt_install(*APT_PACKAGES).pip_install(*PIP_PACKAGES)
 
 
 # =============================================================================
@@ -304,9 +300,7 @@ class ModalREPL(IsolatedEnv):
         **kwargs,
     ):
         if persistent:
-            raise NotImplementedError(
-                "Persistent REPLs are currently not supported for environment: ModalREPL"
-            )
+            raise NotImplementedError("Persistent REPLs are currently not supported for environment: ModalREPL")
         super().__init__(persistent=persistent, depth=depth, **kwargs)
 
         self.app_name = app_name
@@ -418,9 +412,7 @@ class ModalREPL(IsolatedEnv):
 
         elif req_type == "batched":
             prompts = req_data.get("prompts", [])
-            responses = send_lm_request_batched(
-                self.lm_handler_address, prompts, model=model, depth=self.depth
-            )
+            responses = send_lm_request_batched(self.lm_handler_address, prompts, model=model, depth=self.depth)
 
             results = []
             for resp in responses:

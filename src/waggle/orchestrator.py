@@ -5,7 +5,7 @@ import contextlib
 import hashlib
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from waggle.models import ObservationResult, PrimeContextResult, SubgraphResult
@@ -59,7 +59,7 @@ class MemoryScope:
 class ConversationTurn:
     user_message: str
     assistant_response: str
-    occurred_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    occurred_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     turn_id: str = ""
 
 

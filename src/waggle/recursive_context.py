@@ -15,6 +15,7 @@ This module adds a NEW orchestration layer on top of existing Waggle
 primitives.  It does NOT replace query_graph, hybrid retrieval, or
 prime_context.
 """
+
 from __future__ import annotations
 
 import logging
@@ -23,7 +24,7 @@ import random
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -33,6 +34,7 @@ LOGGER = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Config helpers
 # ---------------------------------------------------------------------------
+
 
 def _env_bool(name: str, default: bool) -> bool:
     val = os.environ.get(name, "").strip().lower()
@@ -119,6 +121,7 @@ class AblationConfig:
 # Internal hit container (lightweight, not a Pydantic model for speed)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class _Hit:
     """A single retrieved memory item with provenance and score."""
@@ -128,7 +131,7 @@ class _Hit:
     content: str
     node_type: str
     score: float
-    source: str          # "graph", "hybrid", "verbatim"
+    source: str  # "graph", "hybrid", "verbatim"
     subquery: str = ""
     created_at: datetime | None = None
     valid_to: datetime | None = None
@@ -214,11 +217,11 @@ class RecursiveContextController:
         project = (project or "").strip()
         session_id = (session_id or "").strip()
 
-        scope = dict(
-            agent_id=agent_id,
-            project=project,
-            session_id=session_id,
-        )
+        scope = {
+            "agent_id": agent_id,
+            "project": project,
+            "session_id": session_id,
+        }
 
         # 1. Decompose
         if ablation is not None and ablation.random_subqueries:
@@ -234,19 +237,23 @@ class RecursiveContextController:
                 slice_len = rng.randint(2, min(4, len(words)))
                 start = rng.randint(0, len(words) - slice_len)
                 substring = " ".join(words[start : start + slice_len])
-                subqueries.append(RecursiveSubquery(
-                    query=substring,
-                    purpose="random_substring",
+                subqueries.append(
+                    RecursiveSubquery(
+                        query=substring,
+                        purpose="random_substring",
+                        priority=1.0,
+                        retrieval_modes=["graph", "hybrid"],
+                    )
+                )
+        elif ablation is not None and not ablation.decompose:
+            subqueries = [
+                RecursiveSubquery(
+                    query=query,
+                    purpose="original_query",
                     priority=1.0,
                     retrieval_modes=["graph", "hybrid"],
-                ))
-        elif ablation is not None and not ablation.decompose:
-            subqueries = [RecursiveSubquery(
-                query=query,
-                purpose="original_query",
-                priority=1.0,
-                retrieval_modes=["graph", "hybrid"],
-            )]
+                )
+            ]
         else:
             subqueries = self._decompose_query(query, max_subqueries=max_subqueries, mode=mode)
 
@@ -349,15 +356,19 @@ class RecursiveContextController:
         q = query.lower()
 
         # Detect query intent
-        is_project_query = bool(re.search(
-            r"\b(build|implement|continue|finish|code|develop|fix|debug|feature|task|"
-            r"waggle|project|architecture|design|api|module|class|function|test|deploy)\b",
-            q,
-        ))
-        is_continuation = bool(re.search(
-            r"\b(continue|pick up|where we left|resume|last time|from before|carry on)\b",
-            q,
-        ))
+        is_project_query = bool(
+            re.search(
+                r"\b(build|implement|continue|finish|code|develop|fix|debug|feature|task|"
+                r"waggle|project|architecture|design|api|module|class|function|test|deploy)\b",
+                q,
+            )
+        )
+        is_continuation = bool(
+            re.search(
+                r"\b(continue|pick up|where we left|resume|last time|from before|carry on)\b",
+                q,
+            )
+        )
 
         # Extract the main topic/entity from the query (first noun-like phrase)
         topic = self._extract_topic(query)
@@ -402,26 +413,32 @@ class RecursiveContextController:
 
         # Deep mode: add extra subqueries
         if mode == "deep":
-            templates.append((
-                f"bugs errors or rejected approaches for {topic}",
-                "bugs_rejected",
-                0.70,
-                ["graph", "hybrid"],
-            ))
-            templates.append((
-                f"next steps or planned work for {topic}",
-                "next_steps",
-                0.72,
-                ["graph", "hybrid"],
-            ))
+            templates.append(
+                (
+                    f"bugs errors or rejected approaches for {topic}",
+                    "bugs_rejected",
+                    0.70,
+                    ["graph", "hybrid"],
+                )
+            )
+            templates.append(
+                (
+                    f"next steps or planned work for {topic}",
+                    "next_steps",
+                    0.72,
+                    ["graph", "hybrid"],
+                )
+            )
 
         for sq_query, purpose, priority, modes in templates[:max_subqueries]:
-            subqueries.append(RecursiveSubquery(
-                query=sq_query,
-                purpose=purpose,
-                priority=priority,
-                retrieval_modes=modes,
-            ))
+            subqueries.append(
+                RecursiveSubquery(
+                    query=sq_query,
+                    purpose=purpose,
+                    priority=priority,
+                    retrieval_modes=modes,
+                )
+            )
 
         return subqueries
 
@@ -562,7 +579,7 @@ class RecursiveContextController:
             try:
                 result = self._graph.get_related(node_id=node_id, max_depth=min(depth, 2))
                 for node in result.nodes:
-                    if node.id not in {nid for nid in node_ids}:
+                    if node.id not in set(node_ids):
                         hits.append(self._node_to_hit(node, source="graph_expansion", subquery=""))
                 edges.extend(result.edges)
             except Exception as exc:
@@ -586,7 +603,7 @@ class RecursiveContextController:
         - contradicts edge: keep both, record conflict entry
         - expired valid_to: mark as superseded
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         hit_by_id = {h.node_id: h for h in hits}
         conflict_entries: list[dict[str, Any]] = []
 
@@ -607,20 +624,22 @@ class RecursiveContextController:
             elif rel == "contradicts":
                 if src in hit_by_id and tgt in hit_by_id:
                     hit_by_id[src].contradicts_ids.append(tgt)
-                    conflict_entries.append({
-                        "source_id": src,
-                        "source_label": hit_by_id[src].label,
-                        "target_id": tgt,
-                        "target_label": hit_by_id[tgt].label,
-                        "relationship": "contradicts",
-                    })
+                    conflict_entries.append(
+                        {
+                            "source_id": src,
+                            "source_label": hit_by_id[src].label,
+                            "target_id": tgt,
+                            "target_label": hit_by_id[tgt].label,
+                            "relationship": "contradicts",
+                        }
+                    )
 
         # Mark expired nodes as superseded
         for hit in hits:
             if hit.valid_to is not None:
                 vt = hit.valid_to
                 if vt.tzinfo is None:
-                    vt = vt.replace(tzinfo=timezone.utc)
+                    vt = vt.replace(tzinfo=UTC)
                 if vt < now:
                     hit.is_superseded = True
                     hit.score *= 0.2
@@ -652,7 +671,7 @@ class RecursiveContextController:
         return sorted(
             hits,
             key=lambda h: (
-                0 if not h.is_superseded else 1,   # superseded last
+                0 if not h.is_superseded else 1,  # superseded last
                 -h.score,
                 h.label.lower(),
             ),
@@ -745,9 +764,7 @@ class RecursiveContextController:
         if conflicts:
             conflict_lines = ["Conflicts or superseded context:"]
             for c in conflicts:
-                bullet = (
-                    f"- Possible conflict: '{c['source_label']}' contradicts '{c['target_label']}'"
-                )
+                bullet = f"- Possible conflict: '{c['source_label']}' contradicts '{c['target_label']}'"
                 cost = self._estimate_tokens(bullet)
                 if used_tokens + cost > max_tokens:
                     break

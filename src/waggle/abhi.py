@@ -9,14 +9,11 @@ import os
 import re
 import shutil
 import tempfile
-import zipfile
 import warnings
+import zipfile
 from copy import deepcopy
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
-
-logger = logging.getLogger(__name__)
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
@@ -33,9 +30,7 @@ from waggle.errors import (
 )
 from waggle.models import (
     AbhiChunkLoadResult,
-    AbhiDiffResult,
     AbhiExportResult,
-    AbhiImportResult,
     AbhiInspectResult,
     AbhiMergeResult,
     AbhiQueryResult,
@@ -48,6 +43,8 @@ from waggle.models import (
     NodeDiffRecord,
 )
 
+logger = logging.getLogger(__name__)
+
 ABHI_SPEC_VERSION = "2.0.0"
 ABHI_MAJOR_VERSION = 2
 ABHI_ENCRYPTION_ALGORITHM = "aes-256-gcm"
@@ -58,7 +55,7 @@ ABHI_ENCRYPTION_ALGORITHM = "aes-256-gcm"
 # The reader strips these 4 bytes before passing the payload to zipfile.
 # Bump the version byte (e.g. \x02) only when the ZIP layout itself changes in
 # a backwards-incompatible way.
-ABHI_MAGIC = b"\x57\x47\x4C\x01"  # W G L \x01
+ABHI_MAGIC = b"\x57\x47\x4c\x01"  # W G L \x01
 ABHI_MAGIC_LEN = len(ABHI_MAGIC)
 _ABHI_ZIP_MAGIC = b"PK\x03\x04"  # standard ZIP local-file-header signature
 ABHI_SIGNATURE_ALGORITHM = "ed25519"
@@ -72,19 +69,39 @@ ABHI_SIGNATURE_MEMBER = "signatures/content.ed25519"
 ABHI_PUBLIC_KEY_MEMBER = "signatures/public_key.pem"
 ABHI_DETERMINISTIC_ZIP_TIMESTAMP = (2000, 1, 1, 0, 0, 0)
 
-DIFFED_FIELDS: frozenset[str] = frozenset({
-    "label", "content", "node_type", "tags",
-    "valid_from", "valid_to", "aliases", "metadata",
-})
+DIFFED_FIELDS: frozenset[str] = frozenset(
+    {
+        "label",
+        "content",
+        "node_type",
+        "tags",
+        "valid_from",
+        "valid_to",
+        "aliases",
+        "metadata",
+    }
+)
 
-IGNORED_FIELDS: frozenset[str] = frozenset({
-    "updated_at", "access_count", "embedding_b64",
-    "embedding_model_id", "embedding_dim",
-})
+IGNORED_FIELDS: frozenset[str] = frozenset(
+    {
+        "updated_at",
+        "access_count",
+        "embedding_b64",
+        "embedding_model_id",
+        "embedding_dim",
+    }
+)
 
-EDGE_DIFFED_FIELDS: frozenset[str] = frozenset({
-    "relationship", "weight", "source_id", "target_id", "metadata",
-})
+EDGE_DIFFED_FIELDS: frozenset[str] = frozenset(
+    {
+        "relationship",
+        "weight",
+        "source_id",
+        "target_id",
+        "metadata",
+    }
+)
+
 
 def _canonical_json(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -139,9 +156,7 @@ def _scope_match(record: dict[str, Any], *, project: str, agent_id: str, session
         return False
     if agent_id.strip() and str(record.get("agent_id", "")).strip() != agent_id.strip():
         return False
-    if session_id.strip() and str(record.get("session_id", "")).strip() != session_id.strip():
-        return False
-    return True
+    return not (session_id.strip() and str(record.get("session_id", "")).strip() != session_id.strip())
 
 
 def _redact_text(text: str, patterns: list[str]) -> str:
@@ -238,7 +253,9 @@ def _normalize_node(record: dict[str, Any], *, redact_patterns: list[str], inclu
     normalized = deepcopy(record)
     normalized["source_prompt"] = _redact_text(str(record.get("source_prompt", "")), redact_patterns)
     normalized["tags"] = sorted(str(tag) for tag in normalized.get("tags", []) if str(tag).strip())
-    normalized["evidence_records"] = _sorted_records(list(normalized.get("evidence_records", [])), "evidence_id", "session_id", "turn_index")
+    normalized["evidence_records"] = _sorted_records(
+        list(normalized.get("evidence_records", [])), "evidence_id", "session_id", "turn_index"
+    )
     embedding = normalized.pop("embedding", None)
     if include_embeddings:
         normalized["embedding_b64"] = _coerce_embedding_b64(normalized.get("embedding_b64") or embedding)
@@ -249,7 +266,9 @@ def _normalize_node(record: dict[str, Any], *, redact_patterns: list[str], inclu
 
 def _normalize_edge(record: dict[str, Any]) -> dict[str, Any]:
     normalized = deepcopy(record)
-    normalized["shared_entities"] = sorted(str(item) for item in normalized.get("shared_entities", []) if str(item).strip())
+    normalized["shared_entities"] = sorted(
+        str(item) for item in normalized.get("shared_entities", []) if str(item).strip()
+    )
     return normalized
 
 
@@ -281,7 +300,11 @@ def filter_snapshot_by_scope(
         return deepcopy(snapshot)
 
     filtered = deepcopy(snapshot)
-    filtered["nodes"] = [node for node in snapshot.get("nodes", []) if _scope_match(node, project=project, agent_id=agent_id, session_id=session_id)]
+    filtered["nodes"] = [
+        node
+        for node in snapshot.get("nodes", [])
+        if _scope_match(node, project=project, agent_id=agent_id, session_id=session_id)
+    ]
     selected_node_ids = {str(node.get("id", "")).strip() for node in filtered["nodes"]}
     filtered["edges"] = [
         edge
@@ -300,7 +323,9 @@ def filter_snapshot_by_scope(
         if str(node.get("context_window_id", "")).strip()
     }
     filtered["context_windows"] = [
-        window for window in snapshot.get("context_windows", []) if str(window.get("id", "")).strip() in selected_window_ids
+        window
+        for window in snapshot.get("context_windows", [])
+        if str(window.get("id", "")).strip() in selected_window_ids
     ]
     filtered["context_window_edges"] = [
         edge
@@ -312,13 +337,15 @@ def filter_snapshot_by_scope(
     return filtered
 
 
-def _scope_filter(snapshot: dict[str, Any], *, scope: str, project: str, agent_id: str, session_id: str, since_date: str) -> dict[str, Any]:
+def _scope_filter(
+    snapshot: dict[str, Any], *, scope: str, project: str, agent_id: str, session_id: str, since_date: str
+) -> dict[str, Any]:
     normalized = scope.strip().lower() or "all"
     filtered = deepcopy(snapshot)
     if normalized in {"project", "session"}:
         filtered = filter_snapshot_by_scope(
             filtered,
-            project=project if normalized == "project" else project,
+            project=project,
             agent_id=agent_id,
             session_id=session_id if normalized == "session" else "",
         )
@@ -326,7 +353,11 @@ def _scope_filter(snapshot: dict[str, Any], *, scope: str, project: str, agent_i
         cutoff = since_date.strip()
         if not cutoff:
             raise ValidationFailure("--scope since-date requires --since-date.")
-        filtered["nodes"] = [node for node in filtered.get("nodes", []) if str(node.get("updated_at") or node.get("created_at") or "") >= cutoff]
+        filtered["nodes"] = [
+            node
+            for node in filtered.get("nodes", [])
+            if str(node.get("updated_at") or node.get("created_at") or "") >= cutoff
+        ]
         node_ids = {str(node.get("id", "")).strip() for node in filtered["nodes"]}
         filtered["edges"] = [
             edge
@@ -374,14 +405,16 @@ def build_abhi_document(
     )
     nodes = _sorted_records(
         [
-        _normalize_node(item, redact_patterns=redact_patterns, include_embeddings=include_embeddings)
-        for item in filtered.get("nodes", [])
-    ],
+            _normalize_node(item, redact_patterns=redact_patterns, include_embeddings=include_embeddings)
+            for item in filtered.get("nodes", [])
+        ],
         "id",
         "source_turn_pair_id",
         "updated_at",
     )
-    all_edges = _sorted_records([_normalize_edge(item) for item in filtered.get("edges", [])], "id", "source_id", "target_id", "relationship")
+    all_edges = _sorted_records(
+        [_normalize_edge(item) for item in filtered.get("edges", [])], "id", "source_id", "target_id", "relationship"
+    )
 
     # Filter low-confidence RELATES_TO edges unless caller opts in.
     edges_filtered_count = 0
@@ -393,6 +426,7 @@ def build_abhi_document(
                 if isinstance(meta, str):
                     try:
                         import json as _json
+
                         meta = _json.loads(meta)
                     except Exception:
                         meta = {}
@@ -405,9 +439,13 @@ def build_abhi_document(
     else:
         edges = all_edges
 
-    context_windows = _sorted_records([_normalize_window(item) for item in filtered.get("context_windows", [])], "id", "session_id")
+    context_windows = _sorted_records(
+        [_normalize_window(item) for item in filtered.get("context_windows", [])], "id", "session_id"
+    )
     repos = _sorted_records(list(filtered.get("repos", [])), "id", "name")
-    context_window_edges = _sorted_records(list(filtered.get("context_window_edges", [])), "id", "source_window_id", "target_window_id", "edge_type")
+    context_window_edges = _sorted_records(
+        list(filtered.get("context_window_edges", [])), "id", "source_window_id", "target_window_id", "edge_type"
+    )
     manifest = {
         "schema_version": ABHI_SPEC_VERSION,
         "tenant": str(filtered.get("tenant_id", "")),
@@ -489,7 +527,9 @@ def _infer_embedding_dim(nodes: list[dict[str, Any]], transcripts: list[dict[str
 
 
 def _signature_payload(document: dict[str, Any]) -> bytes:
-    content_hash = _hash_with_prefix(str(document.get("manifest", {}).get("content_hash", "")) or compute_abhi_hash(document))
+    content_hash = _hash_with_prefix(
+        str(document.get("manifest", {}).get("content_hash", "")) or compute_abhi_hash(document)
+    )
     return content_hash.encode("utf-8")
 
 
@@ -554,7 +594,13 @@ def write_abhi_document(
     try:
         os.close(tmp_fd)
         with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            _write_member(archive, manifest, ABHI_TRANSCRIPTS_MEMBER, _record_lines(document["transcripts"]), passphrase=passphrase)
+            _write_member(
+                archive,
+                manifest,
+                ABHI_TRANSCRIPTS_MEMBER,
+                _record_lines(document["transcripts"]),
+                passphrase=passphrase,
+            )
             _write_member(archive, manifest, ABHI_NODES_MEMBER, _record_lines(document["nodes"]), passphrase=passphrase)
             _write_member(archive, manifest, ABHI_EDGES_MEMBER, _record_lines(document["edges"]), passphrase=passphrase)
             _write_member(
@@ -609,9 +655,7 @@ def load_abhi_document(input_path: str | Path, passphrase: str = "") -> dict[str
     # --- Format detection ---
     # Guard against truncated / empty files before slicing.
     if len(raw) < 4:
-        raise ValidationFailure(
-            f"{source} is not a valid .abhi file (file is too short or empty)."
-        )
+        raise ValidationFailure(f"{source} is not a valid .abhi file (file is too short or empty).")
 
     header = raw[:ABHI_MAGIC_LEN]
     if header == ABHI_MAGIC:
@@ -621,15 +665,13 @@ def load_abhi_document(input_path: str | Path, passphrase: str = "") -> dict[str
         # v0: bare ZIP written before magic bytes were introduced.
         # Warn so users know to re-export with a current Waggle client.
         logger.warning(
-            "%s is a legacy v0 .abhi file (no magic bytes). "
-            "Re-export with Waggle 0.1.15+ to upgrade to the v1 format.",
+            "%s is a legacy v0 .abhi file (no magic bytes). Re-export with Waggle 0.1.15+ to upgrade to the v1 format.",
             source,
         )
         zip_source = source
     else:
         raise ValidationFailure(
-            f"{source} is not a valid .abhi file. "
-            "The file may be corrupt or was not exported by a Waggle MCP client."
+            f"{source} is not a valid .abhi file. The file may be corrupt or was not exported by a Waggle MCP client."
         )
 
     with zipfile.ZipFile(zip_source, "r") as archive:
@@ -639,10 +681,14 @@ def load_abhi_document(input_path: str | Path, passphrase: str = "") -> dict[str
         _assert_supported_schema_version(str(manifest.get("schema_version", "")))
         document = {
             "manifest": manifest,
-            "transcripts": _parse_lines(_read_member(archive, manifest, ABHI_TRANSCRIPTS_MEMBER, passphrase=passphrase)),
+            "transcripts": _parse_lines(
+                _read_member(archive, manifest, ABHI_TRANSCRIPTS_MEMBER, passphrase=passphrase)
+            ),
             "nodes": _parse_lines(_read_member(archive, manifest, ABHI_NODES_MEMBER, passphrase=passphrase)),
             "edges": _parse_lines(_read_member(archive, manifest, ABHI_EDGES_MEMBER, passphrase=passphrase)),
-            "context_windows": _parse_lines(_read_member(archive, manifest, ABHI_CONTEXT_WINDOWS_MEMBER, passphrase=passphrase)),
+            "context_windows": _parse_lines(
+                _read_member(archive, manifest, ABHI_CONTEXT_WINDOWS_MEMBER, passphrase=passphrase)
+            ),
         }
         if manifest.get("signatures", {}).get("present"):
             document["signature"] = archive.read(ABHI_SIGNATURE_MEMBER)
@@ -652,8 +698,20 @@ def load_abhi_document(input_path: str | Path, passphrase: str = "") -> dict[str
 
 def inspect_abhi_document(document: dict[str, Any], *, input_path: str | Path) -> AbhiInspectResult:
     manifest = document.get("manifest", {})
-    node_types = sorted({str(node.get("node_type", "")).strip() for node in document.get("nodes", []) if str(node.get("node_type", "")).strip()})
-    edge_types = sorted({str(edge.get("relationship", "")).strip() for edge in document.get("edges", []) if str(edge.get("relationship", "")).strip()})
+    node_types = sorted(
+        {
+            str(node.get("node_type", "")).strip()
+            for node in document.get("nodes", [])
+            if str(node.get("node_type", "")).strip()
+        }
+    )
+    edge_types = sorted(
+        {
+            str(edge.get("relationship", "")).strip()
+            for edge in document.get("edges", [])
+            if str(edge.get("relationship", "")).strip()
+        }
+    )
     return AbhiInspectResult(
         input_path=str(Path(input_path).expanduser()),
         tenant_id=str(manifest.get("tenant", "")),
@@ -690,10 +748,14 @@ def _classify_node_identity(node_a, node_b) -> Literal["identical", "modified", 
             meta_b = node_b.get("metadata") or {}
             all_keys = set(meta_a) | set(meta_b)
             for key in all_keys:
-                if json.dumps(meta_a.get(key), sort_keys=True, default=str) != json.dumps(meta_b.get(key), sort_keys=True, default=str):
+                if json.dumps(meta_a.get(key), sort_keys=True, default=str) != json.dumps(
+                    meta_b.get(key), sort_keys=True, default=str
+                ):
                     return "modified"
         else:
-            if json.dumps(node_a.get(field), sort_keys=True, default=str) != json.dumps(node_b.get(field), sort_keys=True, default=str):
+            if json.dumps(node_a.get(field), sort_keys=True, default=str) != json.dumps(
+                node_b.get(field), sort_keys=True, default=str
+            ):
                 return "modified"
     return "identical"
 
@@ -702,7 +764,9 @@ def _classify_edge_identity(edge_a, edge_b) -> Literal["identical", "modified", 
     if edge_a["id"] != edge_b["id"]:
         return "separate"
     for field in EDGE_DIFFED_FIELDS:
-        if json.dumps(edge_a.get(field), sort_keys=True, default=str) != json.dumps(edge_b.get(field), sort_keys=True, default=str):
+        if json.dumps(edge_a.get(field), sort_keys=True, default=str) != json.dumps(
+            edge_b.get(field), sort_keys=True, default=str
+        ):
             return "modified"
     return "identical"
 
@@ -717,11 +781,13 @@ def _compute_node_delta(node_a, node_b) -> list[FieldDelta]:
                 old_val = meta_a.get(key)
                 new_val = meta_b.get(key)
                 if json.dumps(old_val, sort_keys=True, default=str) != json.dumps(new_val, sort_keys=True, default=str):
-                    deltas.append(FieldDelta(
-                        field=f"metadata.{key}",
-                        old_value=old_val if node_a is not None else None,
-                        new_value=new_val if node_b is not None else None,
-                    ))
+                    deltas.append(
+                        FieldDelta(
+                            field=f"metadata.{key}",
+                            old_value=old_val if node_a is not None else None,
+                            new_value=new_val if node_b is not None else None,
+                        )
+                    )
         else:
             old_val = node_a.get(field) if node_a is not None else None
             new_val = node_b.get(field) if node_b is not None else None
@@ -746,6 +812,7 @@ def _check_schema_version_compatibility(version_a: str, version_b: str, operatio
             return int(str(v).split(".", 1)[0].strip() or "0")
         except ValueError:
             return 0
+
     if _major(version_a) != _major(version_b):
         raise SchemaVersionError(
             f"Cannot {operation} documents with incompatible schema versions: "
@@ -783,9 +850,7 @@ def diff_abhi_documents(
             )
         else:
             schema_version_mismatch = True
-            result_warnings.append(
-                f"Schema version mismatch: {version_a} vs {version_b}. Diff may be incomplete."
-            )
+            result_warnings.append(f"Schema version mismatch: {version_a} vs {version_b}. Diff may be incomplete.")
 
     nodes_a = {str(node.get("id", "")): node for node in document_a.get("nodes", [])}
     nodes_b = {str(node.get("id", "")): node for node in document_b.get("nodes", [])}
@@ -806,39 +871,47 @@ def diff_abhi_documents(
         if na is None:
             nodes_added.append(nid)
             deltas = _compute_node_delta(None, nb)
-            node_records.append(NodeDiffRecord(
-                node_id=nid,
-                classification="added",
-                label=str(nb.get("label", "") or nb.get("content", "")[:60]),
-                deltas=deltas,
-            ))
+            node_records.append(
+                NodeDiffRecord(
+                    node_id=nid,
+                    classification="added",
+                    label=str(nb.get("label", "") or nb.get("content", "")[:60]),
+                    deltas=deltas,
+                )
+            )
         elif nb is None:
             nodes_removed.append(nid)
             deltas = _compute_node_delta(na, None)
-            node_records.append(NodeDiffRecord(
-                node_id=nid,
-                classification="removed",
-                label=str(na.get("label", "") or na.get("content", "")[:60]),
-                deltas=deltas,
-            ))
+            node_records.append(
+                NodeDiffRecord(
+                    node_id=nid,
+                    classification="removed",
+                    label=str(na.get("label", "") or na.get("content", "")[:60]),
+                    deltas=deltas,
+                )
+            )
         else:
             classification = _classify_node_identity(na, nb)
             if classification == "modified":
                 nodes_updated.append(nid)
                 deltas = _compute_node_delta(na, nb)
-                node_records.append(NodeDiffRecord(
-                    node_id=nid,
-                    classification="modified",
-                    label=str(nb.get("label", "") or nb.get("content", "")[:60]),
-                    deltas=deltas,
-                ))
+                node_records.append(
+                    NodeDiffRecord(
+                        node_id=nid,
+                        classification="modified",
+                        label=str(nb.get("label", "") or nb.get("content", "")[:60]),
+                        deltas=deltas,
+                    )
+                )
             else:
-                node_records.append(NodeDiffRecord(
-                    node_id=nid,
-                    classification="identical",
-                    label=str(nb.get("label", "") or nb.get("content", "")[:60]),
-                    deltas=[],
-                ))
+                node_records.append(
+                    NodeDiffRecord(
+                        node_id=nid,
+                        classification="identical",
+                        label=str(nb.get("label", "") or nb.get("content", "")[:60]),
+                        deltas=[],
+                    )
+                )
 
     edges_added: list[str] = []
     edges_removed: list[str] = []
@@ -888,17 +961,28 @@ def diff_abhi_documents(
                 base_val = base_node.get(field)
                 left_val = left_node.get(field)
                 right_val = right_node.get(field)
-                left_changed = json.dumps(base_val, sort_keys=True, default=str) != json.dumps(left_val, sort_keys=True, default=str)
-                right_changed = json.dumps(base_val, sort_keys=True, default=str) != json.dumps(right_val, sort_keys=True, default=str)
-                if left_changed and right_changed and json.dumps(left_val, sort_keys=True, default=str) != json.dumps(right_val, sort_keys=True, default=str):
-                    conflict_records.append(MergeConflictRecord(
-                        object_id=nid,
-                        object_type="node",
-                        field=field,
-                        base_value=base_val,
-                        left_value=left_val,
-                        right_value=right_val,
-                    ))
+                left_changed = json.dumps(base_val, sort_keys=True, default=str) != json.dumps(
+                    left_val, sort_keys=True, default=str
+                )
+                right_changed = json.dumps(base_val, sort_keys=True, default=str) != json.dumps(
+                    right_val, sort_keys=True, default=str
+                )
+                if (
+                    left_changed
+                    and right_changed
+                    and json.dumps(left_val, sort_keys=True, default=str)
+                    != json.dumps(right_val, sort_keys=True, default=str)
+                ):
+                    conflict_records.append(
+                        MergeConflictRecord(
+                            object_id=nid,
+                            object_type="node",
+                            field=field,
+                            base_value=base_val,
+                            left_value=left_val,
+                            right_value=right_val,
+                        )
+                    )
 
         # Edge three-way conflict detection
         edges_base = {str(e.get("id", "")): e for e in base_document.get("edges", [])}
@@ -914,17 +998,28 @@ def diff_abhi_documents(
                 base_val = base_edge.get(field)
                 left_val = left_edge.get(field)
                 right_val = right_edge.get(field)
-                left_changed = json.dumps(base_val, sort_keys=True, default=str) != json.dumps(left_val, sort_keys=True, default=str)
-                right_changed = json.dumps(base_val, sort_keys=True, default=str) != json.dumps(right_val, sort_keys=True, default=str)
-                if left_changed and right_changed and json.dumps(left_val, sort_keys=True, default=str) != json.dumps(right_val, sort_keys=True, default=str):
-                    conflict_records.append(MergeConflictRecord(
-                        object_id=eid,
-                        object_type="edge",
-                        field=field,
-                        base_value=base_val,
-                        left_value=left_val,
-                        right_value=right_val,
-                    ))
+                left_changed = json.dumps(base_val, sort_keys=True, default=str) != json.dumps(
+                    left_val, sort_keys=True, default=str
+                )
+                right_changed = json.dumps(base_val, sort_keys=True, default=str) != json.dumps(
+                    right_val, sort_keys=True, default=str
+                )
+                if (
+                    left_changed
+                    and right_changed
+                    and json.dumps(left_val, sort_keys=True, default=str)
+                    != json.dumps(right_val, sort_keys=True, default=str)
+                ):
+                    conflict_records.append(
+                        MergeConflictRecord(
+                            object_id=eid,
+                            object_type="edge",
+                            field=field,
+                            base_value=base_val,
+                            left_value=left_val,
+                            right_value=right_val,
+                        )
+                    )
 
     return FieldLevelDiffResult(
         input_path_a=str(Path(input_path_a).expanduser()),
@@ -950,7 +1045,7 @@ def diff_abhi_documents(
 def _set_field_val(item: dict[str, Any], field: str, value: Any) -> None:
     """Set a field on an item, supporting metadata.* nested fields."""
     if field.startswith("metadata."):
-        key = field[len("metadata."):]
+        key = field[len("metadata.") :]
         if "metadata" not in item or item["metadata"] is None:
             item["metadata"] = {}
         item["metadata"][key] = value
@@ -972,6 +1067,7 @@ def _apply_merge_strategy(
 ) -> dict[str, Any]:
     """Apply the merge strategy to a single conflicting item."""
     from uuid import uuid4
+
     fields = DIFFED_FIELDS if object_type == "node" else EDGE_DIFFED_FIELDS
     result = deepcopy(right_item)  # start with right as base
 
@@ -980,8 +1076,12 @@ def _apply_merge_strategy(
         left_val = left_item.get(field)
         right_val = right_item.get(field)
 
-        left_changed = json.dumps(base_val, sort_keys=True, default=str) != json.dumps(left_val, sort_keys=True, default=str)
-        right_changed = json.dumps(base_val, sort_keys=True, default=str) != json.dumps(right_val, sort_keys=True, default=str)
+        left_changed = json.dumps(base_val, sort_keys=True, default=str) != json.dumps(
+            left_val, sort_keys=True, default=str
+        )
+        right_changed = json.dumps(base_val, sort_keys=True, default=str) != json.dumps(
+            right_val, sort_keys=True, default=str
+        )
 
         if not left_changed and not right_changed:
             continue
@@ -1036,35 +1136,39 @@ def _apply_merge_strategy(
             else:
                 contradict_source = item_id
                 contradict_target = item_id
-            contradict_edges.append({
-                "id": str(uuid4()),
-                "source_id": contradict_source,
-                "target_id": contradict_target,
-                "relationship": "contradicts",
-                "weight": 1.0,
-                "metadata": {
-                    "conflict_field": field,
-                    "conflict_edge_id": item_id if object_type == "edge" else "",
-                    "left_value": left_val,
-                    "right_value": right_val,
-                    "auto_generated": True,
-                },
-            })
+            contradict_edges.append(
+                {
+                    "id": str(uuid4()),
+                    "source_id": contradict_source,
+                    "target_id": contradict_target,
+                    "relationship": "contradicts",
+                    "weight": 1.0,
+                    "metadata": {
+                        "conflict_field": field,
+                        "conflict_edge_id": item_id if object_type == "edge" else "",
+                        "left_value": left_val,
+                        "right_value": right_val,
+                        "auto_generated": True,
+                    },
+                }
+            )
         else:
             resolved_val = right_val
             resolved_by = effective_strategy
 
         _set_field_val(result, field, resolved_val)
-        conflict_records.append(MergeConflictRecord(
-            object_id=item_id,
-            object_type=object_type,
-            field=field,
-            base_value=base_val,
-            left_value=left_val,
-            right_value=right_val,
-            resolved_by=resolved_by,
-            resolved_value=resolved_val,
-        ))
+        conflict_records.append(
+            MergeConflictRecord(
+                object_id=item_id,
+                object_type=object_type,
+                field=field,
+                base_value=base_val,
+                left_value=left_val,
+                right_value=right_val,
+                resolved_by=resolved_by,
+                resolved_value=resolved_val,
+            )
+        )
 
     return result
 
@@ -1136,6 +1240,7 @@ def merge_abhi_documents(
     dry_run: bool = False,
 ) -> AbhiMergeResult:
     import time
+
     _t0 = time.monotonic()
 
     conflict_records: list[MergeConflictRecord] = []
@@ -1186,13 +1291,19 @@ def merge_abhi_documents(
     )
 
     merged_snapshot = {
-        "tenant_id": str(right_document.get("manifest", {}).get("tenant") or left_document.get("manifest", {}).get("tenant", "")),
+        "tenant_id": str(
+            right_document.get("manifest", {}).get("tenant") or left_document.get("manifest", {}).get("tenant", "")
+        ),
         "transcripts": merged_transcripts,
         "nodes": merged_nodes,
         "edges": merged_edges,
         "context_windows": merged_windows,
-        "ui": deepcopy(right_document.get("manifest", {}).get("ui", {}) or left_document.get("manifest", {}).get("ui", {})),
-        "repos": deepcopy(right_document.get("manifest", {}).get("repos", []) or left_document.get("manifest", {}).get("repos", [])),
+        "ui": deepcopy(
+            right_document.get("manifest", {}).get("ui", {}) or left_document.get("manifest", {}).get("ui", {})
+        ),
+        "repos": deepcopy(
+            right_document.get("manifest", {}).get("repos", []) or left_document.get("manifest", {}).get("repos", [])
+        ),
         "context_window_edges": deepcopy(
             right_document.get("manifest", {}).get("context_window_edges", [])
             or left_document.get("manifest", {}).get("context_window_edges", [])
@@ -1212,8 +1323,13 @@ def merge_abhi_documents(
 
     if dry_run:
         _elapsed = time.monotonic() - _t0
-        logger.info("Dry-run merge completed in %.3fs: %d nodes, %d edges, %d conflicts",
-                    _elapsed, len(merged_nodes), len(merged_edges), len(conflict_records))
+        logger.info(
+            "Dry-run merge completed in %.3fs: %d nodes, %d edges, %d conflicts",
+            _elapsed,
+            len(merged_nodes),
+            len(merged_edges),
+            len(conflict_records),
+        )
         return AbhiMergeResult(
             base_input_path=str(base_input_path),
             left_input_path=str(left_input_path),
@@ -1257,8 +1373,13 @@ def merge_abhi_documents(
         logger.warning("Hash verification failed: %s", exc)
 
     _elapsed = time.monotonic() - _t0
-    logger.info("Merge completed in %.3fs: %d nodes, %d edges, %d conflicts",
-                _elapsed, len(merged_nodes), len(merged_edges), len(conflict_records))
+    logger.info(
+        "Merge completed in %.3fs: %d nodes, %d edges, %d conflicts",
+        _elapsed,
+        len(merged_nodes),
+        len(merged_edges),
+        len(conflict_records),
+    )
 
     return AbhiMergeResult(
         base_input_path=str(base_input_path),
@@ -1319,7 +1440,13 @@ def execute_abhi_query(document: dict[str, Any], *, query_id: str = "", query_te
         for edge in document.get("edges", [])
         if str(edge.get("source_id", "")).strip() in node_ids and str(edge.get("target_id", "")).strip() in node_ids
     ]
-    chunk_ids = sorted({f"chunk-{index // ABHI_CHUNK_NODE_LIMIT}" for index, node in enumerate(document.get("nodes", [])) if str(node.get("id", "")).strip() in node_ids})
+    chunk_ids = sorted(
+        {
+            f"chunk-{index // ABHI_CHUNK_NODE_LIMIT}"
+            for index, node in enumerate(document.get("nodes", []))
+            if str(node.get("id", "")).strip() in node_ids
+        }
+    )
     compatible_nodes = []
     for node in matched_nodes:
         enriched = deepcopy(node)
@@ -1368,13 +1495,17 @@ def load_abhi_chunks(
         "chunk_ids": selected_chunk_ids,
         "nodes": chunk_nodes,
         "edges": chunk_edges,
-        "available_chunk_count": max(1, (len(nodes) + ABHI_CHUNK_NODE_LIMIT - 1) // ABHI_CHUNK_NODE_LIMIT) if nodes else 0,
+        "available_chunk_count": max(1, (len(nodes) + ABHI_CHUNK_NODE_LIMIT - 1) // ABHI_CHUNK_NODE_LIMIT)
+        if nodes
+        else 0,
         "load_strategy": "chunked" if len(nodes) > ABHI_CHUNK_NODE_LIMIT else "full",
         "query": query_text,
     }
 
 
-def query_abhi_file(input_path: str | Path, *, query_id: str = "", query_text: str = "", passphrase: str = "") -> AbhiQueryResult:
+def query_abhi_file(
+    input_path: str | Path, *, query_id: str = "", query_text: str = "", passphrase: str = ""
+) -> AbhiQueryResult:
     source = Path(input_path).expanduser()
     document = load_abhi_document(source, passphrase=passphrase)
     payload = execute_abhi_query(document, query_id=query_id, query_text=query_text)
@@ -1389,8 +1520,14 @@ def query_abhi_file(input_path: str | Path, *, query_id: str = "", query_text: s
         node_ids=[str(node.get("id", "")) for node in payload["nodes"]],
         edge_ids=[str(edge.get("id", "")) for edge in payload["edges"]],
         chunk_ids=payload["chunk_ids"],
-        scanned_chunk_count=max(1, (len(document.get("nodes", [])) + ABHI_CHUNK_NODE_LIMIT - 1) // ABHI_CHUNK_NODE_LIMIT) if document.get("nodes") else 0,
-        executed_actions=dispatch_abhi_event(document, event_name="on_query", persist=False, input_path=source, query_payload=payload),
+        scanned_chunk_count=max(
+            1, (len(document.get("nodes", [])) + ABHI_CHUNK_NODE_LIMIT - 1) // ABHI_CHUNK_NODE_LIMIT
+        )
+        if document.get("nodes")
+        else 0,
+        executed_actions=dispatch_abhi_event(
+            document, event_name="on_query", persist=False, input_path=source, query_payload=payload
+        ),
     )
 
 
@@ -1470,9 +1607,7 @@ def validate_abhi_signature(
     if trusted_public_key_path is not None:
         key_path = Path(trusted_public_key_path).expanduser()
         if not key_path.exists():
-            raise ValidationFailure(
-                f"Trusted public key file not found: {key_path}"
-            )
+            raise ValidationFailure(f"Trusted public key file not found: {key_path}")
         public_key = serialization.load_pem_public_key(key_path.read_bytes())
     else:
         warnings.warn(
@@ -1692,7 +1827,9 @@ def diff_abhi_files(
     document_a = load_abhi_document(input_path_a, passphrase=passphrase)
     document_b = load_abhi_document(input_path_b, passphrase=passphrase)
     base_document = load_abhi_document(input_path_base, passphrase=passphrase) if input_path_base is not None else None
-    return diff_abhi_documents(document_a, document_b, input_path_a=input_path_a, input_path_b=input_path_b, base_document=base_document)
+    return diff_abhi_documents(
+        document_a, document_b, input_path_a=input_path_a, input_path_b=input_path_b, base_document=base_document
+    )
 
 
 def merge_abhi_files(
@@ -1802,9 +1939,7 @@ def upgrade_abhi_document(
     )
 
     if current_version == target_version:
-        logger.info(
-            "Document already at target version %s, no upgrade needed.", target_version
-        )
+        logger.info("Document already at target version %s, no upgrade needed.", target_version)
         return AbhiExportResult(
             output_path=str(Path(output_path).expanduser()),
             tenant_id=str(manifest.get("tenant", "")),
@@ -1839,9 +1974,7 @@ def upgrade_abhi_document(
         }
         return write_abhi_document(snapshot, output_path=output_path, passphrase=passphrase)
     else:
-        raise SchemaVersionError(
-            f"Upgrade from {current_version} to {target_version} is not supported."
-        )
+        raise SchemaVersionError(f"Upgrade from {current_version} to {target_version} is not supported.")
 
 
 def serialize_abhi_diff(result: Any, *, fmt: str = "human", max_chars: int = 4000) -> str:
@@ -1885,7 +2018,7 @@ def serialize_abhi_diff(result: Any, *, fmt: str = "human", max_chars: int = 400
         lines.append(f"\n... and {changed_count - truncated_after} more changes omitted\n")
     output = "".join(lines)
     if len(output) > max_chars:
-        output = output[:max_chars - len("\n[output truncated]")] + "\n[output truncated]"
+        output = output[: max_chars - len("\n[output truncated]")] + "\n[output truncated]"
     return output
 
 

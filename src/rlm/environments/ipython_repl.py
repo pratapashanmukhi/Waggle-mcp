@@ -549,9 +549,7 @@ class IPythonREPL(NonIsolatedEnv):
         **kwargs,
     ):
         if kernel_mode not in ("in_process", "subprocess"):
-            raise ValueError(
-                f"kernel_mode must be 'in_process' or 'subprocess', got {kernel_mode!r}"
-            )
+            raise ValueError(f"kernel_mode must be 'in_process' or 'subprocess', got {kernel_mode!r}")
         if startup_timeout <= 0:
             raise ValueError(f"startup_timeout must be positive, got {startup_timeout!r}")
         if subcall_timeout is not None and subcall_timeout <= 0:
@@ -560,8 +558,7 @@ class IPythonREPL(NonIsolatedEnv):
             # asking for a "0s timeout" actually wants. ``None`` means
             # "no timeout"; a positive number means "this many seconds".
             raise ValueError(
-                f"subcall_timeout must be positive or None (got {subcall_timeout!r}); "
-                "use None to disable the timeout."
+                f"subcall_timeout must be positive or None (got {subcall_timeout!r}); use None to disable the timeout."
             )
 
         super().__init__(
@@ -582,9 +579,7 @@ class IPythonREPL(NonIsolatedEnv):
         self.subcall_timeout = subcall_timeout
 
         self.custom_tools = custom_tools or {}
-        self.custom_sub_tools = (
-            custom_sub_tools if custom_sub_tools is not None else self.custom_tools
-        )
+        self.custom_sub_tools = custom_sub_tools if custom_sub_tools is not None else self.custom_tools
         validate_custom_tools(self.custom_tools)
 
         self.original_cwd = os.getcwd()
@@ -680,8 +675,7 @@ class IPythonREPL(NonIsolatedEnv):
             from traitlets.config import Config
         except ImportError as e:
             raise ImportError(
-                "IPython is required for IPythonREPL. Install with: "
-                "pip install 'rlms[ipython]' or pip install ipython"
+                "IPython is required for IPythonREPL. Install with: pip install 'rlms[ipython]' or pip install ipython"
             ) from e
 
         # Disable IPython's history SQLite database. Without this, every
@@ -772,9 +766,7 @@ class IPythonREPL(NonIsolatedEnv):
             depth=self.depth,
             subcall_timeout=self.subcall_timeout,
         )
-        result = self._execute_in_kernel(
-            bootstrap, timeout=self.startup_timeout, drain_broker=False
-        )
+        result = self._execute_in_kernel(bootstrap, timeout=self.startup_timeout, drain_broker=False)
         if result.stderr:
             raise RuntimeError(f"Kernel bootstrap failed:\n{result.stderr}")
 
@@ -809,9 +801,7 @@ class IPythonREPL(NonIsolatedEnv):
                     # closures.
                     payload = dill.dumps(value, recurse=True).hex()
                 except Exception as e:
-                    raise RuntimeError(
-                        f"Custom tool {name!r} could not be pickled with dill: {e}"
-                    ) from e
+                    raise RuntimeError(f"Custom tool {name!r} could not be pickled with dill: {e}") from e
                 code = textwrap.dedent(
                     f"""
                     import dill as _rlm_dill
@@ -820,9 +810,7 @@ class IPythonREPL(NonIsolatedEnv):
                 ).strip()
                 result = self._execute_in_kernel(code, drain_broker=False)
                 if result.stderr:
-                    raise RuntimeError(
-                        f"Failed to inject custom tool {name!r} into kernel: {result.stderr}"
-                    )
+                    raise RuntimeError(f"Failed to inject custom tool {name!r} into kernel: {result.stderr}")
                 continue
 
             # Fallback: JSON-roundtrip for primitive data
@@ -837,9 +825,7 @@ class IPythonREPL(NonIsolatedEnv):
             code = f"import json as _rlm_json; {name} = _rlm_json.loads({json_payload!r})"
             result = self._execute_in_kernel(code, drain_broker=False)
             if result.stderr:
-                raise RuntimeError(
-                    f"Failed to inject custom tool {name!r} into kernel: {result.stderr}"
-                )
+                raise RuntimeError(f"Failed to inject custom tool {name!r} into kernel: {result.stderr}")
 
     # -------------------------------------------------------------------------
     # Scaffold helpers (in-process only; subprocess has its own in the kernel)
@@ -856,9 +842,7 @@ class IPythonREPL(NonIsolatedEnv):
             answer = str(ns[name])
             self._last_final_answer = answer
             return answer
-        available = [
-            k for k in ns.keys() if not k.startswith("_") and k not in _IPYTHON_INTERNAL_NAMES
-        ]
+        available = [k for k in ns.keys() if not k.startswith("_") and k not in _IPYTHON_INTERNAL_NAMES]
         if available:
             return (
                 f"Error: Variable '{name}' not found. "
@@ -887,9 +871,7 @@ class IPythonREPL(NonIsolatedEnv):
     def _show_vars(self) -> str:
         ns = self._shell.user_ns if self._shell is not None else {}
         available = {
-            k: type(v).__name__
-            for k, v in ns.items()
-            if not k.startswith("_") and k not in _IPYTHON_INTERNAL_NAMES
+            k: type(v).__name__ for k, v in ns.items() if not k.startswith("_") and k not in _IPYTHON_INTERNAL_NAMES
         }
         if not available:
             return "No variables created yet. Use ```repl``` blocks to create variables."
@@ -912,9 +894,7 @@ class IPythonREPL(NonIsolatedEnv):
         if not self.lm_handler_address:
             return ["Error: No LM handler configured"] * len(prompts)
         try:
-            responses = send_lm_request_batched(
-                self.lm_handler_address, prompts, model=model, depth=self.depth
-            )
+            responses = send_lm_request_batched(self.lm_handler_address, prompts, model=model, depth=self.depth)
             results: list[str] = []
             for response in responses:
                 if not response.success:
@@ -1032,9 +1012,7 @@ class IPythonREPL(NonIsolatedEnv):
                 context_path = os.path.join(self.temp_dir, f"context_{context_index}.txt")
                 with open(context_path, "w") as f:
                     f.write(context_payload)
-                code = (
-                    f"with open(r'{context_path}', 'r') as _rlm_f:\n    {var_name} = _rlm_f.read()"
-                )
+                code = f"with open(r'{context_path}', 'r') as _rlm_f:\n    {var_name} = _rlm_f.read()"
             else:
                 context_path = os.path.join(self.temp_dir, f"context_{context_index}.json")
                 with open(context_path, "w") as f:
@@ -1238,16 +1216,10 @@ class IPythonREPL(NonIsolatedEnv):
                 # matching the verbosity of subprocess-mode output.
                 if result.error_before_exec is not None:
                     err = result.error_before_exec
-                    stderr_buf.write(
-                        "\n"
-                        + "".join(traceback.format_exception(type(err), err, err.__traceback__))
-                    )
+                    stderr_buf.write("\n" + "".join(traceback.format_exception(type(err), err, err.__traceback__)))
                 if result.error_in_exec is not None:
                     err = result.error_in_exec
-                    stderr_buf.write(
-                        "\n"
-                        + "".join(traceback.format_exception(type(err), err, err.__traceback__))
-                    )
+                    stderr_buf.write("\n" + "".join(traceback.format_exception(type(err), err, err.__traceback__)))
 
             # Re-inject scaffold in case user code overwrote it
             self._restore_scaffold_in_process()
@@ -1349,12 +1321,7 @@ class IPythonREPL(NonIsolatedEnv):
                     stdout_parts.append(text)
             elif msg_type == "error":
                 error_info = content
-            elif msg_type == "execute_result":
-                data = content.get("data", {})
-                text = data.get("text/plain")
-                if text:
-                    stdout_parts.append(text + "\n")
-            elif msg_type == "display_data":
+            elif msg_type == "execute_result" or msg_type == "display_data":
                 data = content.get("data", {})
                 text = data.get("text/plain")
                 if text:
@@ -1376,9 +1343,7 @@ class IPythonREPL(NonIsolatedEnv):
                 self._km.interrupt_kernel()
             except Exception:
                 pass
-            stderr_parts.append(
-                f"\nTimeoutError: cell execution exceeded {timeout}s and was interrupted"
-            )
+            stderr_parts.append(f"\nTimeoutError: cell execution exceeded {timeout}s and was interrupted")
 
         if error_info is not None and not timed_out:
             ename = error_info.get("ename", "Error")

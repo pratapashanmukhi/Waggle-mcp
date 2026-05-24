@@ -212,9 +212,7 @@ class BaseEnv(ABC):
             }
     """
 
-    def __init__(
-        self, persistent: bool = False, depth: int = 1, max_concurrent_subcalls: int = 4, **kwargs
-    ):
+    def __init__(self, persistent: bool = False, depth: int = 1, max_concurrent_subcalls: int = 4, **kwargs):
         self.persistent = persistent
         self.depth = depth
         self.max_concurrent_subcalls = max_concurrent_subcalls
@@ -322,9 +320,7 @@ class SupportsPersistence(Protocol):
         """
         ...
 
-    def add_context(
-        self, context_payload: dict | list | str, context_index: int | None = None
-    ) -> int:
+    def add_context(self, context_payload: dict | list | str, context_index: int | None = None) -> int:
         """Add a context payload, making it available as context_N in code.
 
         Versioning:
@@ -352,9 +348,7 @@ class SupportsPersistence(Protocol):
         """
         ...
 
-    def add_history(
-        self, message_history: list[dict[str, Any]], history_index: int | None = None
-    ) -> int:
+    def add_history(self, message_history: list[dict[str, Any]], history_index: int | None = None) -> int:
         """Add a message history, making it available as history_N in code.
 
         Versioning:

@@ -7,19 +7,20 @@ These tests ensure that:
 4. The result includes diagnostics (turn_id, verbatim_stored, nodes_extracted, extraction_errors).
 5. Hybrid retrieval is the default.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import patch
-import pytest
+
 import numpy as np
 
 from waggle.graph import MemoryGraph
-from waggle.models import ObservationResult, NodeType
 
 
 class FakeEmbeddingModel:
     """Minimal embedding model for tests (same as test_graph.py)."""
+
     model_name = "fake-model"
     model_id = "fake-model:deterministic-v1"
 
@@ -80,7 +81,7 @@ class TestObserveConversationVerbatimFirst:
 
     def test_observe_conversation_succeeds_with_empty_extraction(self, tmp_path: Path) -> None:
         """Test that observe_conversation succeeds even when extraction returns empty list.
-        
+
         This tests a user's turn that doesn't match any extraction patterns.
         """
         graph = make_graph(tmp_path)
@@ -113,16 +114,16 @@ class TestObserveConversationExtractionRobustness:
     def test_observe_conversation_survives_extraction_exception(self, tmp_path: Path) -> None:
         """Test that verbatim is stored even if extraction raises an exception."""
         graph = make_graph(tmp_path)
-        
+
         # Mock extract_conversation_candidates to raise an exception
         with patch("waggle.graph.extract_conversation_candidates") as mock_extract:
             mock_extract.side_effect = RuntimeError("Extraction crashed!")
-            
+
             result = graph.observe_conversation(
                 user_message="We use PostgreSQL.",
                 assistant_response="Understood.",
             )
-        
+
         # Verbatim should still be stored
         assert result.verbatim_stored is True
         assert result.turn_id
@@ -134,15 +135,15 @@ class TestObserveConversationExtractionRobustness:
     def test_observe_conversation_extraction_error_is_in_result(self, tmp_path: Path) -> None:
         """Test that extraction_errors field captures exception info."""
         graph = make_graph(tmp_path)
-        
+
         with patch("waggle.graph.extract_conversation_candidates") as mock_extract:
             mock_extract.side_effect = ValueError("Bad extraction input")
-            
+
             result = graph.observe_conversation(
                 user_message="Some message.",
                 assistant_response="Some response.",
             )
-        
+
         assert len(result.extraction_errors) > 0
         assert "ValueError" in result.extraction_errors[0]
 
@@ -153,20 +154,20 @@ class TestVerbatimRetrieval:
     def test_verbatim_queryable_with_zero_extraction(self, tmp_path: Path) -> None:
         """Test that a turn with zero extracted nodes is still retrievable via verbatim mode."""
         graph = make_graph(tmp_path)
-        
+
         # Store a turn that produces no extracted nodes
         with patch("waggle.graph.extract_conversation_candidates") as mock_extract:
             mock_extract.return_value = []  # Force zero extraction
-            
+
             observe_result = graph.observe_conversation(
                 user_message="mongo felt right for this project",
                 assistant_response="sounds good",
                 session_id="test-session",
             )
-        
+
         assert observe_result.verbatim_stored is True
         assert observe_result.nodes_extracted == 0
-        
+
         # Query in verbatim mode should find the transcript
         query_result = graph.query(
             query="mongo project",
@@ -174,12 +175,14 @@ class TestVerbatimRetrieval:
             session_id="test-session",
             max_nodes=5,
         )
-        
+
         # Should find the turn via transcript (replay_hits use transcript_text field)
         assert query_result.replay_hits or query_result.fusion_hits
         # Check if mongo is in the transcript
         if query_result.replay_hits:
-            assert any("mongo" in (hit.transcript_text or hit.transcript_snippet).lower() for hit in query_result.replay_hits)
+            assert any(
+                "mongo" in (hit.transcript_text or hit.transcript_snippet).lower() for hit in query_result.replay_hits
+            )
 
 
 class TestHybridRetrievalDefault:
@@ -188,34 +191,34 @@ class TestHybridRetrievalDefault:
     def test_query_defaults_to_hybrid(self, tmp_path: Path) -> None:
         """Test that query() works with hybrid retrieval mode."""
         graph = make_graph(tmp_path)
-        
+
         # Store a turn
         graph.observe_conversation(
             user_message="We use PostgreSQL.",
             assistant_response="Got it.",
         )
-        
+
         # Query explicitly with hybrid retrieval_mode
         result = graph.query(query="database", retrieval_mode="hybrid")
-        
+
         # Should use hybrid retrieval (fusion_hits should be populated)
         assert result.retrieval_mode in {"hybrid", "tiered", "flat_fallback"}
 
     def test_query_accepts_hybrid_no_rerank_alias(self, tmp_path: Path) -> None:
         """Test that 'hybrid_no_rerank' is accepted as an alias for 'hybrid'."""
         graph = make_graph(tmp_path)
-        
+
         graph.observe_conversation(
             user_message="PostgreSQL choice.",
             assistant_response="Got it.",
         )
-        
+
         # Query with hybrid_no_rerank should work (alias)
         result = graph.query(
             query="database",
             retrieval_mode="hybrid_no_rerank",
         )
-        
+
         # Should succeed without raising
         assert result.query == "database"
 
@@ -230,13 +233,13 @@ class TestObserveConversationResultFields:
             user_message="Python for backend.",
             assistant_response="Let's use Python.",
         )
-        
+
         # Check old fields
         assert hasattr(result, "stored_nodes")
         assert hasattr(result, "created_count")
         assert hasattr(result, "reused_count")
         assert hasattr(result, "conflicts")
-        
+
         # Check new fields
         assert hasattr(result, "turn_id")
         assert hasattr(result, "verbatim_stored")
@@ -251,7 +254,7 @@ class TestObserveConversationResultFields:
             user_message="We use FastAPI.",
             assistant_response="Noted.",
         )
-        
+
         assert isinstance(result.turn_id, str)
         assert isinstance(result.verbatim_stored, bool)
         assert isinstance(result.nodes_extracted, int)
@@ -266,35 +269,35 @@ class TestEdgeCases:
     def test_observe_conversation_with_empty_user_message(self, tmp_path: Path) -> None:
         """Test handling of empty user message."""
         graph = make_graph(tmp_path)
-        
+
         result = graph.observe_conversation(
             user_message="",
             assistant_response="How can I help?",
         )
-        
+
         # Should still store the assistant response
         assert result.verbatim_stored is True
 
     def test_observe_conversation_with_empty_assistant_response(self, tmp_path: Path) -> None:
         """Test handling of empty assistant response."""
         graph = make_graph(tmp_path)
-        
+
         result = graph.observe_conversation(
             user_message="I prefer Python.",
             assistant_response="",
         )
-        
+
         # Should still store the user message
         assert result.verbatim_stored is True
 
     def test_observe_conversation_with_both_empty(self, tmp_path: Path) -> None:
         """Test handling of both messages being empty."""
         graph = make_graph(tmp_path)
-        
+
         result = graph.observe_conversation(
             user_message="",
             assistant_response="",
         )
-        
+
         # Should still mark as stored (no content to store, but no error)
         assert result.verbatim_stored is True or result.turn_id  # At minimum, turn_id should exist

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -83,9 +83,9 @@ def make_app(tmp_path: Path) -> WaggleServer:
 
 def test_verbatim_codeword_retrieval_across_sessions(tmp_path: Path) -> None:
     graph = make_graph(tmp_path, rerank_enabled=False)
-    with graph._lock, graph._connect() as connection:  # noqa: SLF001
-        observed_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        graph._store_transcript_record(  # noqa: SLF001
+    with graph._lock, graph._connect() as connection:
+        observed_at = datetime(2026, 1, 1, tzinfo=UTC)
+        graph._store_transcript_record(
             connection,
             agent_id="codex",
             project="alpha",
@@ -113,15 +113,15 @@ def test_verbatim_codeword_retrieval_across_sessions(tmp_path: Path) -> None:
 
 def test_multi_hop_graph_expansion_fires_for_derived_from_neighbors(tmp_path: Path) -> None:
     graph = make_graph(tmp_path, rerank_enabled=False)
-    with graph._lock, graph._connect() as connection:  # noqa: SLF001
-        observed_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with graph._lock, graph._connect() as connection:
+        observed_at = datetime(2026, 1, 1, tzinfo=UTC)
         for index, text in enumerate(
             [
                 "user: the outage runbook starts with the release plan",
                 "assistant: noted",
             ]
         ):
-            graph._store_transcript_record(  # noqa: SLF001
+            graph._store_transcript_record(
                 connection,
                 agent_id="codex",
                 project="alpha",
@@ -193,14 +193,16 @@ def test_reranker_promotes_late_candidate_into_top_five(tmp_path: Path) -> None:
     retriever = HybridRetriever(
         graph,
         config=HybridRetrievalConfig(rerank_enabled=True, rerank_model="fake", rerank_top_k_in=20, rerank_top_k_out=5),
-        rerank_callable=lambda prompt, model: '{"top_hits":[{"candidate_id":"cand-15","reasoning":"It directly answers the query."}]}',
+        rerank_callable=lambda prompt, model: (
+            '{"top_hits":[{"candidate_id":"cand-15","reasoning":"It directly answers the query."}]}'
+        ),
     )
     candidates = [
         CandidateMemory(candidate_id=f"cand-{index}", content=f"candidate {index}", source="node", score=100 - index)
         for index in range(20)
     ]
 
-    reranked = retriever._rerank(query="best candidate", candidates=candidates, top_k_out=5)  # noqa: SLF001
+    reranked = retriever._rerank(query="best candidate", candidates=candidates, top_k_out=5)
 
     assert any(item.candidate_id == "cand-15" for item in reranked[:5])
     promoted = next(item for item in reranked if item.candidate_id == "cand-15")
@@ -269,7 +271,7 @@ def test_cross_session_codeword_verification_uses_verbatim_layer_when_extraction
         agent_id="claude",
     )
 
-    with session_a._lock, session_a._connect() as connection:  # noqa: SLF001
+    with session_a._lock, session_a._connect() as connection:
         transcript_rows = connection.execute(
             """
             SELECT transcript_text, embedding

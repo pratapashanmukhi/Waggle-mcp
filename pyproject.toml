@@ -130,6 +130,11 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["waggle", "rlm"]
 
+[tool.ruff.lint.per-file-ignores]
+"src/rlm/**/*.py" = ["RUF001", "RUF005", "RUF013", "SIM105", "SIM118"]
+"tests/test_demo.py" = ["E402"]
+"tests/test_hooks.py" = ["E402"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"

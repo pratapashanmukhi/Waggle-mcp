@@ -114,9 +114,7 @@ class RLM:
         self.backend = backend
         self.backend_kwargs = backend_kwargs
         self.environment_type = environment
-        self.environment_kwargs = (
-            environment_kwargs.copy() if environment_kwargs is not None else {}
-        )
+        self.environment_kwargs = environment_kwargs.copy() if environment_kwargs is not None else {}
         # Validate other_backends: currently only support one additional backend
         if other_backends is not None:
             if len(other_backends) != 1:
@@ -172,17 +170,13 @@ class RLM:
         # Log metadata if logger is provided
         if self.logger or verbose:
             metadata = RLMMetadata(
-                root_model=backend_kwargs.get("model_name", "unknown")
-                if backend_kwargs
-                else "unknown",
+                root_model=backend_kwargs.get("model_name", "unknown") if backend_kwargs else "unknown",
                 max_depth=max_depth,
                 max_iterations=max_iterations,
                 backend=backend,
                 backend_kwargs=filter_sensitive_keys(backend_kwargs) if backend_kwargs else {},
                 environment_type=environment,
-                environment_kwargs=filter_sensitive_keys(environment_kwargs)
-                if environment_kwargs
-                else {},
+                environment_kwargs=filter_sensitive_keys(environment_kwargs) if environment_kwargs else {},
                 other_backends=other_backends,
             )
             if self.logger:
@@ -273,9 +267,7 @@ class RLM:
             )
         return message_history
 
-    def completion(
-        self, prompt: str | dict[str, Any], root_prompt: str | None = None
-    ) -> RLMChatCompletion:
+    def completion(self, prompt: str | dict[str, Any], root_prompt: str | None = None) -> RLMChatCompletion:
         """
         Recursive Language Model completion call. This is the main entry point for querying an RLM, and
         can replace a regular LM completion call.
@@ -314,12 +306,8 @@ class RLM:
 
                     # Compaction: check if context needs summarization
                     if self.compaction and hasattr(environment, "append_compaction_entry"):
-                        current_tokens, threshold_tokens, max_tokens = self._get_compaction_status(
-                            message_history
-                        )
-                        self.verbose.print_compaction_status(
-                            current_tokens, threshold_tokens, max_tokens
-                        )
+                        current_tokens, threshold_tokens, max_tokens = self._get_compaction_status(message_history)
+                        self.verbose.print_compaction_status(current_tokens, threshold_tokens, max_tokens)
                         if current_tokens >= threshold_tokens:
                             compaction_count += 1
                             self.verbose.print_compaction()
@@ -329,18 +317,12 @@ class RLM:
 
                     # Current prompt = message history + additional prompt suffix
                     context_count = (
-                        environment.get_context_count()
-                        if isinstance(environment, SupportsPersistence)
-                        else 1
+                        environment.get_context_count() if isinstance(environment, SupportsPersistence) else 1
                     )
                     history_count = (
-                        environment.get_history_count()
-                        if isinstance(environment, SupportsPersistence)
-                        else 0
+                        environment.get_history_count() if isinstance(environment, SupportsPersistence) else 0
                     )
-                    current_prompt = message_history + [
-                        build_user_prompt(root_prompt, i, context_count, history_count)
-                    ]
+                    current_prompt = message_history + [build_user_prompt(root_prompt, i, context_count, history_count)]
 
                     iteration: RLMIteration = self._completion_turn(
                         prompt=current_prompt,
@@ -359,9 +341,7 @@ class RLM:
                             final_answer = block.result.final_answer
                             break
                     if final_answer is None:
-                        final_answer = find_final_answer(
-                            iteration.response, environment=environment
-                        )
+                        final_answer = find_final_answer(iteration.response, environment=environment)
                     iteration.final_answer = final_answer
 
                     # Store as best partial answer (most recent response with content)
@@ -423,9 +403,7 @@ class RLM:
                 environment.add_history(message_history)
 
             return RLMChatCompletion(
-                root_model=self.backend_kwargs.get("model_name", "unknown")
-                if self.backend_kwargs
-                else "unknown",
+                root_model=self.backend_kwargs.get("model_name", "unknown") if self.backend_kwargs else "unknown",
                 prompt=prompt,
                 response=final_answer,
                 usage_summary=usage,
@@ -448,14 +426,11 @@ class RLM:
                 timeout=self.max_timeout,
                 partial_answer=self._best_partial_answer,
                 message=(
-                    f"Timeout exceeded after iteration {iteration}: "
-                    f"{elapsed:.1f}s of {self.max_timeout:.1f}s limit"
+                    f"Timeout exceeded after iteration {iteration}: {elapsed:.1f}s of {self.max_timeout:.1f}s limit"
                 ),
             )
 
-    def _check_iteration_limits(
-        self, iteration: RLMIteration, iteration_num: int, lm_handler: LMHandler
-    ) -> None:
+    def _check_iteration_limits(self, iteration: RLMIteration, iteration_num: int, lm_handler: LMHandler) -> None:
         """Check error tracking, budget, and token limits after an iteration.
 
         Raises ErrorThresholdExceededError, BudgetExceededError, or TokenLimitExceededError
@@ -530,9 +505,7 @@ class RLM:
 
     def _get_compaction_status(self, message_history: list[dict[str, Any]]) -> tuple[int, int, int]:
         """Return (current_tokens, threshold_tokens, max_tokens) for compaction."""
-        model_name = (
-            self.backend_kwargs.get("model_name", "unknown") if self.backend_kwargs else "unknown"
-        )
+        model_name = self.backend_kwargs.get("model_name", "unknown") if self.backend_kwargs else "unknown"
         max_tokens = get_context_limit(model_name)
         current_tokens = count_tokens(message_history, model_name)
         threshold_tokens = int(self.compaction_threshold_pct * max_tokens)
@@ -714,8 +687,7 @@ class RLM:
                     root_model=resolved_model,
                     prompt=prompt,
                     response=(
-                        "Error: Budget exhausted "
-                        f"(spent ${self._cumulative_cost:.6f} of ${self.max_budget:.6f})"
+                        f"Error: Budget exhausted (spent ${self._cumulative_cost:.6f} of ${self.max_budget:.6f})"
                     ),
                     usage_summary=UsageSummary(model_usage_summaries={}),
                     execution_time=0.0,

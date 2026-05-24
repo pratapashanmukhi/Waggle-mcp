@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from waggle.errors import AuthenticationError, AuthorizationError
 from waggle.models import ApiKeyRecord
@@ -49,7 +49,7 @@ class AuthenticatedPrincipal:
 def principal_from_record(record: ApiKeyRecord | None, raw_api_key: str) -> AuthenticatedPrincipal:
     if record is None or record.status != "active":
         raise AuthenticationError("Invalid API key.")
-    if record.expires_at is not None and record.expires_at <= datetime.now(timezone.utc):
+    if record.expires_at is not None and record.expires_at <= datetime.now(UTC):
         raise AuthenticationError("API key expired.")
     if not verify_api_key(raw_api_key, record.key_hash):
         raise AuthenticationError("Invalid API key.")

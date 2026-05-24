@@ -11,6 +11,7 @@ Always exits 0 — never blocks the user's session.
 Timeout: 5 seconds.
 Skips capture when likely secrets are detected in the turn text.
 """
+
 from __future__ import annotations
 
 import json
@@ -49,7 +50,7 @@ def _contains_secret(text: str) -> bool:
     return any(p.search(text) for p in _SECRET_PATTERNS)
 
 
-def _timeout_handler(signum: int, frame: Any) -> None:  # noqa: ANN001
+def _timeout_handler(signum: int, frame: Any) -> None:
     raise TimeoutError("Waggle post_response hook timed out")
 
 

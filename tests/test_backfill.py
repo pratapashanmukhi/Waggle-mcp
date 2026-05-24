@@ -93,11 +93,7 @@ def test_backfill_derives_cross_window_edges(tmp_path: Path) -> None:
 
     stats = backfill_context_windows(graph)
     windows = graph.list_context_windows(project="alpha")
-    edge_types = {
-        edge.edge_type
-        for window in windows
-        for edge in graph.get_context_window_edges(window.id)
-    }
+    edge_types = {edge.edge_type for window in windows for edge in graph.get_context_window_edges(window.id)}
 
     assert stats.window_edges_created >= 1
     assert "supersedes" in edge_types

@@ -516,12 +516,10 @@ class VerbosePrinter:
 
         if usage_summary:
             total_input = sum(
-                m.get("total_input_tokens", 0)
-                for m in usage_summary.get("model_usage_summaries", {}).values()
+                m.get("total_input_tokens", 0) for m in usage_summary.get("model_usage_summaries", {}).values()
             )
             total_output = sum(
-                m.get("total_output_tokens", 0)
-                for m in usage_summary.get("model_usage_summaries", {}).values()
+                m.get("total_output_tokens", 0) for m in usage_summary.get("model_usage_summaries", {}).values()
             )
             total_cost = usage_summary.get("total_cost")
             if total_input or total_output:

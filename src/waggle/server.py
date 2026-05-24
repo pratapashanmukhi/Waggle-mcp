@@ -14,9 +14,9 @@ import threading
 import time
 import uuid
 import webbrowser
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -35,15 +35,22 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from waggle import __version__
-from waggle.abhi import abhi_to_snapshot, build_abhi_document, execute_abhi_query, load_abhi_document, validate_abhi_document, serialize_abhi_diff
-from waggle.config import AppConfig, DEFAULT_DB_PATH, STARTUP_MODE_FAST, STARTUP_MODE_STRICT
-from waggle.embeddings import EmbeddingModel, EMBEDDING_FREE_TOOLS, STATUS_READY, STATUS_DISABLED
+from waggle.abhi import (
+    abhi_to_snapshot,
+    build_abhi_document,
+    execute_abhi_query,
+    load_abhi_document,
+    serialize_abhi_diff,
+    validate_abhi_document,
+)
+from waggle.config import DEFAULT_DB_PATH, AppConfig
+from waggle.embeddings import EMBEDDING_FREE_TOOLS, STATUS_DISABLED, STATUS_READY, EmbeddingModel
 from waggle.errors import (
     AuthenticationError,
-    WaggleError,
     PayloadTooLargeError,
     ServiceUnavailableError,
     ValidationFailure,
+    WaggleError,
 )
 from waggle.graph import MemoryGraph
 from waggle.graph_ui import render_graph_editor_html
@@ -60,8 +67,6 @@ from waggle.models import (
     ContextWindow,
     ContextWindowEdge,
     DrivePullResult,
-    DrivePushResult,
-    DriveShareResult,
     GraphDiffResult,
     GraphStats,
     MarkdownVaultExportResult,
@@ -78,16 +83,14 @@ from waggle.models import (
     TimelineResult,
     TopicResult,
     TranscriptIngestionInput,
-    TranscriptMessage,
     utc_now,
 )
 from waggle.rate_limit import RateLimiter
-from waggle.runtime_context import runtime_context
 from waggle.recursive_context import (
-    RecursiveContextController,
-    RecursiveContextResult,
     RECURSIVE_CONTEXT_ENABLED,
+    RecursiveContextController,
 )
+from waggle.runtime_context import runtime_context
 from waggle.serializer import (
     serialize_abhi_chunk_load,
     serialize_abhi_inspect,
@@ -173,20 +176,20 @@ REQUIRED_RUNTIME_METHODS = (
 # This means export_context_bundle literally IS commit --commit_format=bundle,
 # and callers who pass explicit args still get what they asked for.
 _TOOL_ALIASES: dict[str, tuple[str, dict[str, object]]] = {
-    "export_graph_backup":  ("commit", {"commit_format": "backup"}),
-    "export_abhi":          ("commit", {"commit_format": "abhi"}),
-    "export_context_bundle":("commit", {"commit_format": "bundle"}),
-    "import_graph_backup":  ("pull",   {"pull_format": "backup"}),
-    "import_abhi":          ("pull",   {"pull_format": "abhi"}),
-    "diff_abhi":            ("diff",   {}),
-    "merge_abhi":           ("merge",  {}),
-    "validate_abhi":        ("fsck",   {}),
-    "inspect_abhi":         ("show",   {}),
-    "query_abhi":           ("grep",   {}),
+    "export_graph_backup": ("commit", {"commit_format": "backup"}),
+    "export_abhi": ("commit", {"commit_format": "abhi"}),
+    "export_context_bundle": ("commit", {"commit_format": "bundle"}),
+    "import_graph_backup": ("pull", {"pull_format": "backup"}),
+    "import_abhi": ("pull", {"pull_format": "abhi"}),
+    "diff_abhi": ("diff", {}),
+    "merge_abhi": ("merge", {}),
+    "validate_abhi": ("fsck", {}),
+    "inspect_abhi": ("show", {}),
+    "query_abhi": ("grep", {}),
     # Recursive context assembly aliases
-    "recursive_context":    ("build_context", {}),
-    "assemble_context":     ("build_context", {}),
-    "rlm_context":          ("build_context", {}),
+    "recursive_context": ("build_context", {}),
+    "assemble_context": ("build_context", {}),
+    "rlm_context": ("build_context", {}),
 }
 
 _EXPORT_SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -197,7 +200,10 @@ _EXPORT_SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("JWT token", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9._-]{8,}\.[A-Za-z0-9._-]{8,}\b")),
     ("Password assignment", re.compile(r"(?i)\b(password|passwd|pwd)\b\s*[:=]\s*['\"]?\S+")),
-    ("Secret/token assignment", re.compile(r"(?i)\b(api[_ -]?key|secret[_ -]?key|access[_ -]?token)\b\s*[:=]\s*['\"]?\S+")),
+    (
+        "Secret/token assignment",
+        re.compile(r"(?i)\b(api[_ -]?key|secret[_ -]?key|access[_ -]?token)\b\s*[:=]\s*['\"]?\S+"),
+    ),
 )
 
 
@@ -378,6 +384,7 @@ def _assert_export_safe(
             "Export refused because transcript_records appear to contain secrets. "
             f"Run again with --force only after redacting or confirming the export scope is safe. Findings: {summary}."
         )
+
 
 MEMORY_AUTOMATION_POLICY = """Waggle automatic memory policy
 
@@ -561,7 +568,10 @@ class WaggleServer:
                 inputSchema=_object_input_schema(
                     {
                         "label": {"type": "string", "description": "Short label for the knowledge being stored."},
-                        "content": {"type": "string", "description": "Full natural-language description for this node."},
+                        "content": {
+                            "type": "string",
+                            "description": "Full natural-language description for this node.",
+                        },
                         "node_type": {
                             "type": "string",
                             "enum": [node_type.value for node_type in NodeType],
@@ -673,19 +683,28 @@ class WaggleServer:
                 ),
                 inputSchema=_object_input_schema(
                     {
-                        "query": {"type": "string", "description": "Optional natural-language search query to rank the broad retrieval."},
+                        "query": {
+                            "type": "string",
+                            "description": "Optional natural-language search query to rank the broad retrieval.",
+                        },
                         "node_types": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Optional list of node types to filter by (e.g., 'fact', 'entity')."
+                            "description": "Optional list of node types to filter by (e.g., 'fact', 'entity').",
                         },
                         "tags": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Optional list of tags to require."
+                            "description": "Optional list of tags to require.",
                         },
-                        "max_nodes": {"type": "integer", "description": "Maximum number of nodes to return (default 100, up to 1000)."},
-                        "max_depth": {"type": "integer", "description": "Relationship traversal depth around matching nodes."},
+                        "max_nodes": {
+                            "type": "integer",
+                            "description": "Maximum number of nodes to return (default 100, up to 1000).",
+                        },
+                        "max_depth": {
+                            "type": "integer",
+                            "description": "Relationship traversal depth around matching nodes.",
+                        },
                         "include_invalidated": {
                             "type": "boolean",
                             "default": False,
@@ -790,7 +809,10 @@ class WaggleServer:
                 ),
                 inputSchema=_object_input_schema(
                     {
-                        "node_id": {"type": "string", "description": "ID of the node whose neighborhood should be returned."},
+                        "node_id": {
+                            "type": "string",
+                            "description": "ID of the node whose neighborhood should be returned.",
+                        },
                         "max_depth": {
                             "type": "integer",
                             "default": 2,
@@ -892,7 +914,10 @@ class WaggleServer:
                 inputSchema=_object_input_schema(
                     {
                         "node_id": {"type": "string", "description": "Optional node ID to anchor the timeline."},
-                        "query": {"type": "string", "description": "Optional natural-language query to select relevant memories."},
+                        "query": {
+                            "type": "string",
+                            "description": "Optional natural-language query to select relevant memories.",
+                        },
                         "limit": {
                             "type": "integer",
                             "default": 25,
@@ -954,7 +979,7 @@ class WaggleServer:
                         "winner": {
                             "type": "string",
                             "description": "Optional node ID of the winning node. Must be source_id or target_id of the edge. "
-                                           "When provided, the losing node's valid_to is set to now, superseding it.",
+                            "When provided, the losing node's valid_to is set to now, superseding it.",
                         },
                     },
                     required=["edge_id"],
@@ -969,7 +994,10 @@ class WaggleServer:
                 inputSchema=_object_input_schema(
                     {
                         "node_id": {"type": "string", "description": "ID of the node to update."},
-                        "content": {"type": "string", "description": "Replacement natural-language content for the node."},
+                        "content": {
+                            "type": "string",
+                            "description": "Replacement natural-language content for the node.",
+                        },
                         "label": {"type": "string", "description": "Replacement short label for the node."},
                         "tags": {
                             "type": "array",
@@ -1048,7 +1076,10 @@ class WaggleServer:
                 ),
                 inputSchema=_object_input_schema(
                     {
-                        "content": {"type": "string", "description": "Long-form content to decompose into memory nodes."},
+                        "content": {
+                            "type": "string",
+                            "description": "Long-form content to decompose into memory nodes.",
+                        },
                         "context": {
                             "type": "string",
                             "default": "",
@@ -1071,8 +1102,14 @@ class WaggleServer:
                 ),
                 inputSchema=_object_input_schema(
                     {
-                        "user_message": {"type": "string", "description": "The user's message from the completed turn."},
-                        "assistant_response": {"type": "string", "description": "The assistant's response from the completed turn."},
+                        "user_message": {
+                            "type": "string",
+                            "description": "The user's message from the completed turn.",
+                        },
+                        "assistant_response": {
+                            "type": "string",
+                            "description": "The assistant's response from the completed turn.",
+                        },
                         **_scope_properties(),
                     },
                     required=["user_message", "assistant_response"],
@@ -1212,7 +1249,10 @@ class WaggleServer:
                 ),
                 inputSchema=_object_input_schema(
                     {
-                        "input_path": {"type": "string", "description": "Path to the .abhi or JSON backup file to import."},
+                        "input_path": {
+                            "type": "string",
+                            "description": "Path to the .abhi or JSON backup file to import.",
+                        },
                         "pull_format": {
                             "type": "string",
                             "enum": ["abhi", "backup"],
@@ -1232,8 +1272,14 @@ class WaggleServer:
                 ),
                 inputSchema=_object_input_schema(
                     {
-                        "input_path_a": {"type": "string", "description": "Path to the first .abhi file (base / ours)."},
-                        "input_path_b": {"type": "string", "description": "Path to the second .abhi file (theirs / feature branch)."},
+                        "input_path_a": {
+                            "type": "string",
+                            "description": "Path to the first .abhi file (base / ours).",
+                        },
+                        "input_path_b": {
+                            "type": "string",
+                            "description": "Path to the second .abhi file (theirs / feature branch).",
+                        },
                     },
                     required=["input_path_a", "input_path_b"],
                 ),
@@ -1249,8 +1295,14 @@ class WaggleServer:
                 inputSchema=_object_input_schema(
                     {
                         "base_input_path": {"type": "string", "description": "Path to the common base .abhi file."},
-                        "left_input_path": {"type": "string", "description": "Path to the left branch .abhi file (ours)."},
-                        "right_input_path": {"type": "string", "description": "Path to the right branch .abhi file (theirs)."},
+                        "left_input_path": {
+                            "type": "string",
+                            "description": "Path to the left branch .abhi file (ours).",
+                        },
+                        "right_input_path": {
+                            "type": "string",
+                            "description": "Path to the right branch .abhi file (theirs).",
+                        },
                         "output_path": {"type": "string", "description": "Destination path for the merged .abhi file."},
                         "merge_strategy": {
                             "type": "string",
@@ -1291,7 +1343,10 @@ class WaggleServer:
                             "description": "Optional explicit chunk ids to load.",
                         },
                         "query_id": {"type": "string", "description": "Optional saved query id used to select chunks."},
-                        "query_text": {"type": "string", "description": "Optional ad hoc query text used to select chunks."},
+                        "query_text": {
+                            "type": "string",
+                            "description": "Optional ad hoc query text used to select chunks.",
+                        },
                     },
                     required=["input_path"],
                 ),
@@ -1341,7 +1396,12 @@ class WaggleServer:
                     "Use to sync edited vault notes back into memory. Returns created, updated, deleted-edge, and conflict counts."
                 ),
                 inputSchema=_object_input_schema(
-                    {"root_path": {"type": "string", "description": "Source directory of the Markdown vault to import."}},
+                    {
+                        "root_path": {
+                            "type": "string",
+                            "description": "Source directory of the Markdown vault to import.",
+                        }
+                    },
                     required=["root_path"],
                 ),
             ),
@@ -1531,9 +1591,24 @@ class WaggleServer:
     def build_resources(self) -> types.ListResourcesResult:
         return types.ListResourcesResult(
             resources=[
-                types.Resource(uri="graph://stats", name="Graph Stats", description="Current graph statistics.", mimeType="text/plain"),
-                types.Resource(uri="graph://recent", name="Recent Graph Nodes", description="The 10 most recently updated nodes.", mimeType="text/plain"),
-                types.Resource(uri="graph://windows", name="Context Windows", description="Recent context windows grouped by project/session.", mimeType="text/plain"),
+                types.Resource(
+                    uri="graph://stats",
+                    name="Graph Stats",
+                    description="Current graph statistics.",
+                    mimeType="text/plain",
+                ),
+                types.Resource(
+                    uri="graph://recent",
+                    name="Recent Graph Nodes",
+                    description="The 10 most recently updated nodes.",
+                    mimeType="text/plain",
+                ),
+                types.Resource(
+                    uri="graph://windows",
+                    name="Context Windows",
+                    description="Recent context windows grouped by project/session.",
+                    mimeType="text/plain",
+                ),
                 types.Resource(
                     uri="graph://memory-policy",
                     name="Automatic Memory Policy",
@@ -1569,7 +1644,9 @@ class WaggleServer:
         return InitializationOptions(
             server_name="waggle",
             server_version="0.2.0",
-            capabilities=self.server.get_capabilities(notification_options=NotificationOptions(), experimental_capabilities={}),
+            capabilities=self.server.get_capabilities(
+                notification_options=NotificationOptions(), experimental_capabilities={}
+            ),
         )
 
     def _check_embedding_available(
@@ -1584,7 +1661,9 @@ class WaggleServer:
         if em.warmup_status in (STATUS_READY,):  # shouldn't happen in fast mode, but guard it
             return None
         # Best-effort: if the tool supports retrieval_mode, try replay fallback.
-        retrieval_mode = arguments.get("retrieval_mode", "") if name in ("query_graph", "export_context_bundle", "commit") else ""
+        retrieval_mode = (
+            arguments.get("retrieval_mode", "") if name in ("query_graph", "export_context_bundle", "commit") else ""
+        )
         if retrieval_mode in ("verbatim", "lexical"):
             return None  # let it through — no embeddings needed
         return self._tool_result(
@@ -1761,7 +1840,7 @@ class WaggleServer:
                     )
                 elif name == "aggregate_graph":
                     _as_of_raw = arguments.get("as_of")
-                    _as_of = datetime.fromisoformat(_as_of_raw).astimezone(timezone.utc) if _as_of_raw else None
+                    _as_of = datetime.fromisoformat(_as_of_raw).astimezone(UTC) if _as_of_raw else None
                     subgraph = graph.aggregate(
                         query=arguments.get("query", ""),
                         node_types=arguments.get("node_types"),
@@ -1780,7 +1859,7 @@ class WaggleServer:
                     )
                 elif name == "query_graph":
                     _as_of_raw = arguments.get("as_of")
-                    _as_of = datetime.fromisoformat(_as_of_raw).astimezone(timezone.utc) if _as_of_raw else None
+                    _as_of = datetime.fromisoformat(_as_of_raw).astimezone(UTC) if _as_of_raw else None
                     subgraph = graph.query(
                         query=arguments["query"],
                         max_nodes=int(arguments.get("max_nodes", 20)),
@@ -1850,10 +1929,14 @@ class WaggleServer:
                         },
                     )
                 elif name == "get_related":
-                    subgraph = graph.get_related(node_id=arguments["node_id"], max_depth=int(arguments.get("max_depth", 2)))
+                    subgraph = graph.get_related(
+                        node_id=arguments["node_id"], max_depth=int(arguments.get("max_depth", 2))
+                    )
                     result = self._tool_result(serialize_subgraph(subgraph), self._subgraph_payload(subgraph))
                 elif name == "get_node_history":
-                    history = graph.get_node_history(node_id=arguments["node_id"], max_depth=int(arguments.get("max_depth", 2)))
+                    history = graph.get_node_history(
+                        node_id=arguments["node_id"], max_depth=int(arguments.get("max_depth", 2))
+                    )
                     result = self._tool_result(serialize_node_history(history), self._node_history_payload(history))
                 elif name == "timeline":
                     timeline = graph.timeline(
@@ -1876,7 +1959,9 @@ class WaggleServer:
                         resolution_note=arguments.get("resolution_note", ""),
                         winner=arguments.get("winner"),
                     )
-                    result = self._tool_result(serialize_conflict_entry(resolved), self._conflict_entry_payload(resolved))
+                    result = self._tool_result(
+                        serialize_conflict_entry(resolved), self._conflict_entry_payload(resolved)
+                    )
                 elif name == "update_node":
                     node = graph.update_node(
                         node_id=arguments["node_id"],
@@ -1916,7 +2001,9 @@ class WaggleServer:
                         self._clear_scope_payload(cleared),
                     )
                 elif name == "decompose_and_store":
-                    subgraph = graph.decompose_and_store(content=arguments["content"], context=arguments.get("context", ""))
+                    subgraph = graph.decompose_and_store(
+                        content=arguments["content"], context=arguments.get("context", "")
+                    )
                     result = self._tool_result(serialize_subgraph(subgraph), self._subgraph_payload(subgraph))
                 elif name == "observe_conversation":
                     observation = graph.observe_conversation(
@@ -1939,7 +2026,9 @@ class WaggleServer:
                         agent_id=arguments.get("agent_id", ""),
                         session_id=arguments.get("session_id", ""),
                     )
-                    result = self._tool_result(serialize_prime_context(context_result), self._prime_context_payload(context_result))
+                    result = self._tool_result(
+                        serialize_prime_context(context_result), self._prime_context_payload(context_result)
+                    )
                 elif name == "get_topics":
                     # Scope parameters are accepted by the schema but ignored —
                     # topic detection runs across the full tenant graph.
@@ -2187,11 +2276,11 @@ class WaggleServer:
                         project=arguments.get("project", ""),
                         session_id=arguments.get("session_id", ""),
                     )
-                    lines = [f"Edge quality report: {report['total_edges']} edges across {report['total_edge_types']} type(s)."]
+                    lines = [
+                        f"Edge quality report: {report['total_edges']} edges across {report['total_edge_types']} type(s)."
+                    ]
                     for rel, stats in sorted(report.get("by_type", {}).items()):
-                        lines.append(
-                            f"  {rel}: count={stats['count']} avg_confidence={stats['avg_confidence']:.3f}"
-                        )
+                        lines.append(f"  {rel}: count={stats['count']} avg_confidence={stats['avg_confidence']:.3f}")
                     result = self._tool_result("\n".join(lines), report)
                 elif name == "build_context":
                     controller = RecursiveContextController(graph=graph)
@@ -2245,7 +2334,10 @@ class WaggleServer:
                 )
                 self.metrics.observe("waggle_tool_latency_seconds", elapsed, tool=name)
                 if isinstance(exc, AuthenticationError):
-                    self.metrics.increment("waggle_auth_failures_total", tenant_id=getattr(graph, "tenant_id", self.config.default_tenant_id))
+                    self.metrics.increment(
+                        "waggle_auth_failures_total",
+                        tenant_id=getattr(graph, "tenant_id", self.config.default_tenant_id),
+                    )
                 LOGGER.exception("tool_call_failed")
                 return self._error_result(exc)
 
@@ -2256,7 +2348,12 @@ class WaggleServer:
         if isinstance(exc, WaggleError):
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=f"Error [{exc.code}]: {exc}")],
-                structuredContent={"error": str(exc), "error_type": type(exc).__name__, "error_code": exc.code, "status_code": exc.status_code},
+                structuredContent={
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "error_code": exc.code,
+                    "status_code": exc.status_code,
+                },
                 isError=True,
             )
         return types.CallToolResult(
@@ -2595,7 +2692,9 @@ class WaggleServer:
             return
         if name == "observe_conversation":
             self._assert_payload_size(arguments.get("user_message", ""), limit, "observe_conversation.user_message")
-            self._assert_payload_size(arguments.get("assistant_response", ""), limit, "observe_conversation.assistant_response")
+            self._assert_payload_size(
+                arguments.get("assistant_response", ""), limit, "observe_conversation.assistant_response"
+            )
             self._assert_payload_size(arguments.get("agent_id", ""), limit, "observe_conversation.agent_id")
             self._assert_payload_size(arguments.get("project", ""), limit, "observe_conversation.project")
             self._assert_payload_size(arguments.get("session_id", ""), limit, "observe_conversation.session_id")
@@ -2678,27 +2777,26 @@ class MCPHttpApp:
             and not getattr(em, "_warmup_started", False)
         ):
             em.start_background_warmup()
-        async with self.transport.connect() as (read_stream, write_stream):
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(
-                    self.app_server.server.run,
-                    read_stream,
-                    write_stream,
-                    self.app_server.initialization_options(),
-                    False,
-                    True,
-                )
-                self.app_server.validate_startup()
-                self.ready = True
-                self.metrics.set_gauge("waggle_ready", 1)
-                app.state.http_service = self
-                try:
-                    yield
-                finally:
-                    self.draining = True
-                    self.ready = False
-                    self.metrics.set_gauge("waggle_ready", 0)
-                    tg.cancel_scope.cancel()
+        async with self.transport.connect() as (read_stream, write_stream), anyio.create_task_group() as tg:
+            tg.start_soon(
+                self.app_server.server.run,
+                read_stream,
+                write_stream,
+                self.app_server.initialization_options(),
+                False,
+                True,
+            )
+            self.app_server.validate_startup()
+            self.ready = True
+            self.metrics.set_gauge("waggle_ready", 1)
+            app.state.http_service = self
+            try:
+                yield
+            finally:
+                self.draining = True
+                self.ready = False
+                self.metrics.set_gauge("waggle_ready", 0)
+                tg.cancel_scope.cancel()
 
     async def mcp_asgi(self, scope: Any, receive: Any, send: Any) -> None:
         started = time.perf_counter()
@@ -2723,7 +2821,9 @@ class MCPHttpApp:
                 if len(body) > self.config.max_payload_bytes:
                     raise PayloadTooLargeError()
                 receive_callable = self._replay_receive(body)
-                headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in scope.get("headers", [])}
+                headers = {
+                    key.decode("latin-1").lower(): value.decode("latin-1") for key, value in scope.get("headers", [])
+                }
 
             raw_api_key = headers.get("x-api-key", "")
             if not raw_api_key:
@@ -2768,7 +2868,9 @@ class MCPHttpApp:
                 self.metrics.increment("waggle_auth_failures_total")
             if exc.code == "rate_limited":
                 self.metrics.increment("waggle_rate_limit_rejections_total")
-            await JSONResponse({"error": exc.code, "message": str(exc)}, status_code=exc.status_code)(scope, receive, send)
+            await JSONResponse({"error": exc.code, "message": str(exc)}, status_code=exc.status_code)(
+                scope, receive, send
+            )
             status_holder["status"] = exc.status_code
         finally:
             elapsed = time.perf_counter() - started
@@ -2841,7 +2943,9 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
         if raw_api_key:
             principal = app_server._root_graph.authenticate_api_key(raw_api_key)
             return app_server._root_graph.for_tenant(principal.tenant_id), principal
-        tenant_id = tenant_override.strip() or request.query_params.get("tenant_id", "").strip() or config.default_tenant_id
+        tenant_id = (
+            tenant_override.strip() or request.query_params.get("tenant_id", "").strip() or config.default_tenant_id
+        )
         return app_server.graph.for_tenant(tenant_id), None
 
     def _emit_http_audit(
@@ -2872,7 +2976,9 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
             metadata=metadata or {},
         )
 
-    def _require_http_scope(request: Request, required_scope: str, *, tenant_override: str = "") -> tuple[Any, Any | None]:
+    def _require_http_scope(
+        request: Request, required_scope: str, *, tenant_override: str = ""
+    ) -> tuple[Any, Any | None]:
         graph, principal = _graph_from_request(request, tenant_override=tenant_override)
         if principal is not None:
             principal.require_scope(required_scope)
@@ -2905,11 +3011,15 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
             "tenant_id": str(snapshot.get("tenant_id", "")),
             "agent_id": str(payload.get("agent_id", current.get("agent_id", "")) or current.get("agent_id", "")),
             "project": str(payload.get("project", current.get("project", "")) or current.get("project", "")),
-            "session_id": str(payload.get("session_id", current.get("session_id", "")) or current.get("session_id", "")),
+            "session_id": str(
+                payload.get("session_id", current.get("session_id", "")) or current.get("session_id", "")
+            ),
             "context_window_id": current.get("context_window_id"),
             "label": str(payload.get("label", current.get("label", "")) or current.get("label", "")).strip(),
             "content": str(payload.get("content", current.get("content", "")) or current.get("content", "")).strip(),
-            "node_type": str(payload.get("node_type", current.get("node_type", "note")) or current.get("node_type", "note")).strip(),
+            "node_type": str(
+                payload.get("node_type", current.get("node_type", "note")) or current.get("node_type", "note")
+            ).strip(),
             "tags": payload.get("tags", current.get("tags", [])) or [],
             "source_prompt": current.get("source_prompt", ""),
             "metadata": current.get("metadata", {}),
@@ -2932,9 +3042,15 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
         return {
             "id": str(current.get("id") or payload.get("id") or f"preview-{uuid.uuid4()}").strip(),
             "tenant_id": str(snapshot.get("tenant_id", "")),
-            "source_id": str(payload.get("source_id", current.get("source_id", "")) or current.get("source_id", "")).strip(),
-            "target_id": str(payload.get("target_id", current.get("target_id", "")) or current.get("target_id", "")).strip(),
-            "relationship": str(payload.get("relationship", current.get("relationship", "")) or current.get("relationship", "")).strip(),
+            "source_id": str(
+                payload.get("source_id", current.get("source_id", "")) or current.get("source_id", "")
+            ).strip(),
+            "target_id": str(
+                payload.get("target_id", current.get("target_id", "")) or current.get("target_id", "")
+            ).strip(),
+            "relationship": str(
+                payload.get("relationship", current.get("relationship", "")) or current.get("relationship", "")
+            ).strip(),
             "weight": float(payload.get("weight", current.get("weight", 1.0)) or current.get("weight", 1.0)),
             "metadata": current.get("metadata", {}),
             "created_at": current.get("created_at", now),
@@ -2965,7 +3081,11 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
     async def graph_snapshot(request: Request) -> Response:
         scope = _scope_from_request(request)
         graph, _ = _require_http_scope(request, "graph:read")
-        include_source_prompt = request.query_params.get("include_source_prompt", "").strip().lower() in {"1", "true", "yes"}
+        include_source_prompt = request.query_params.get("include_source_prompt", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
         try:
             snapshot = graph.get_graph_snapshot(include_source_prompt=include_source_prompt, **scope)
         except TypeError:
@@ -3040,7 +3160,9 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
         max_nodes = int(payload.get("max_nodes", 8) or 8)
         max_depth = int(payload.get("max_depth", 1) or 1)
         graph, _ = _require_http_scope(request, "graph:read")
-        debug = graph.debug_retrieval(query=query_text, max_nodes=max_nodes, max_depth=max_depth, retrieval_mode="hybrid", **scope)
+        debug = graph.debug_retrieval(
+            query=query_text, max_nodes=max_nodes, max_depth=max_depth, retrieval_mode="hybrid", **scope
+        )
         fusion = graph.query(
             query=query_text,
             retrieval_mode="hybrid",
@@ -3048,7 +3170,13 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
             max_depth=max_depth,
             **scope,
         )
-        token_estimate = sum(max(1, len((hit.content if hasattr(hit, "content") else "") or "").split()) for hit in fusion.fusion_hits) * 1.33
+        token_estimate = (
+            sum(
+                max(1, len((hit.content if hasattr(hit, "content") else "") or "").split())
+                for hit in fusion.fusion_hits
+            )
+            * 1.33
+        )
         fused_ranking: list[dict[str, Any]] = []
         for hit in fusion.fusion_hits:
             reasoning: list[str] = []
@@ -3246,7 +3374,9 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
                     source_id=str(edge_payload.get("source_id", "")).strip() or None,
                     target_id=str(edge_payload.get("target_id", "")).strip() or None,
                     relationship=str(edge_payload.get("relationship", "")).strip() or None,
-                    weight=float(edge_payload["weight"]) if "weight" in edge_payload and edge_payload.get("weight") is not None else None,
+                    weight=float(edge_payload["weight"])
+                    if "weight" in edge_payload and edge_payload.get("weight") is not None
+                    else None,
                 )
                 continue
             graph.add_edge(
@@ -3306,7 +3436,9 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
         payload = await request.json()
         graph, _ = _require_http_scope(request, "graph:write")
         snapshot = graph.get_graph_snapshot()
-        existing = next((node for node in snapshot.get("nodes", []) if str(node.get("id", "")).strip() == node_id), None)
+        existing = next(
+            (node for node in snapshot.get("nodes", []) if str(node.get("id", "")).strip() == node_id), None
+        )
         if existing is None:
             raise ValidationFailure(f"Node not found: {node_id}")
         snapshot["nodes"] = [
@@ -3350,7 +3482,9 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
         payload = await request.json()
         graph, _ = _require_http_scope(request, "graph:write")
         snapshot = graph.get_graph_snapshot()
-        existing = next((item for item in snapshot.get("edges", []) if str(item.get("id", "")).strip() == edge_id), None)
+        existing = next(
+            (item for item in snapshot.get("edges", []) if str(item.get("id", "")).strip() == edge_id), None
+        )
         if existing is None:
             raise ValidationFailure(f"Edge not found: {edge_id}")
         snapshot["edges"] = [
@@ -3428,11 +3562,19 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
             imported_node_ids: list[str] = []
             if import_format == "abhi":
                 document = load_abhi_document(temp_path)
-                imported_node_ids = [str(node.get("id", "")).strip() for node in abhi_to_snapshot(document, fallback_tenant_id=graph.tenant_id).get("nodes", []) if str(node.get("id", "")).strip()]
+                imported_node_ids = [
+                    str(node.get("id", "")).strip()
+                    for node in abhi_to_snapshot(document, fallback_tenant_id=graph.tenant_id).get("nodes", [])
+                    if str(node.get("id", "")).strip()
+                ]
                 imported = graph.import_abhi(input_path=temp_path)
             elif import_format == "json":
                 snapshot = json.loads(content)
-                imported_node_ids = [str(node.get("id", "")).strip() for node in snapshot.get("nodes", []) if str(node.get("id", "")).strip()]
+                imported_node_ids = [
+                    str(node.get("id", "")).strip()
+                    for node in snapshot.get("nodes", [])
+                    if str(node.get("id", "")).strip()
+                ]
                 imported = graph.import_graph_backup(input_path=temp_path)
             else:
                 raise ValidationFailure("format must be one of: abhi, json.")
@@ -3469,7 +3611,11 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
                             "edges": snapshot.get("edges", []),
                             "ui": snapshot.get("ui", {}),
                         },
-                        "imported_node_ids": [str(node.get("id", "")).strip() for node in snapshot.get("nodes", []) if str(node.get("id", "")).strip()],
+                        "imported_node_ids": [
+                            str(node.get("id", "")).strip()
+                            for node in snapshot.get("nodes", [])
+                            if str(node.get("id", "")).strip()
+                        ],
                     }
                 )
             if import_format == "json":
@@ -3477,9 +3623,16 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
                 return JSONResponse(
                     {
                         "validation": {"valid": True, "errors": []},
-                        "inspect": {"node_count": len(snapshot.get("nodes", [])), "edge_count": len(snapshot.get("edges", []))},
+                        "inspect": {
+                            "node_count": len(snapshot.get("nodes", [])),
+                            "edge_count": len(snapshot.get("edges", [])),
+                        },
                         "snapshot": snapshot,
-                        "imported_node_ids": [str(node.get("id", "")).strip() for node in snapshot.get("nodes", []) if str(node.get("id", "")).strip()],
+                        "imported_node_ids": [
+                            str(node.get("id", "")).strip()
+                            for node in snapshot.get("nodes", [])
+                            if str(node.get("id", "")).strip()
+                        ],
                     }
                 )
             raise ValidationFailure("format must be one of: abhi, json.")
@@ -3512,8 +3665,14 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
             return JSONResponse(
                 {
                     "diff": diff.model_dump(mode="json"),
-                    "left": {"nodes": _json_safe_snapshot(snapshot_a).get("nodes", []), "edges": snapshot_a.get("edges", [])},
-                    "right": {"nodes": _json_safe_snapshot(snapshot_b).get("nodes", []), "edges": snapshot_b.get("edges", [])},
+                    "left": {
+                        "nodes": _json_safe_snapshot(snapshot_a).get("nodes", []),
+                        "edges": snapshot_a.get("edges", []),
+                    },
+                    "right": {
+                        "nodes": _json_safe_snapshot(snapshot_b).get("nodes", []),
+                        "edges": snapshot_b.get("edges", []),
+                    },
                 }
             )
         finally:
@@ -3533,7 +3692,9 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
 
     async def admin_retention_update(request: Request) -> Response:
         payload = await request.json()
-        graph, principal = _require_http_scope(request, "admin:write", tenant_override=str(payload.get("tenant_id", "") or ""))
+        graph, principal = _require_http_scope(
+            request, "admin:write", tenant_override=str(payload.get("tenant_id", "") or "")
+        )
         policy = graph.update_retention_policy(
             enabled=payload.get("enabled"),
             retention_days=payload.get("retention_days"),
@@ -3654,6 +3815,7 @@ def _run_graph_editor_command(config: AppConfig, args: argparse.Namespace) -> in
     print("Use Ctrl+C in this terminal to stop the editor server.")
 
     if should_open:
+
         def _open_browser() -> None:
             try:
                 webbrowser.open(url)
@@ -3689,11 +3851,7 @@ async def run_stdio(config: AppConfig) -> None:
     app = get_app(config)
     graph = app._root_graph
     em = graph.embedding_model
-    if (
-        not config.is_fast_mode
-        and hasattr(em, "start_background_warmup")
-        and not getattr(em, "_warmup_started", False)
-    ):
+    if not config.is_fast_mode and hasattr(em, "start_background_warmup") and not getattr(em, "_warmup_started", False):
         # Kick off background warmup so the first semantic call is fast.
         em.start_background_warmup()
     if config.is_strict_mode:
@@ -3864,7 +4022,9 @@ def _build_parser() -> argparse.ArgumentParser:
     open_studio.add_argument("--port", type=int, default=8686)
     open_studio.add_argument("--open", action=argparse.BooleanOptionalAction, default=True)
 
-    create_tenant = subparsers.add_parser("create-tenant", help="Create or update a tenant record in the active backend.")
+    create_tenant = subparsers.add_parser(
+        "create-tenant", help="Create or update a tenant record in the active backend."
+    )
     create_tenant.add_argument("--tenant-id", required=True)
     create_tenant.add_argument("--name", default="")
 
@@ -3895,7 +4055,9 @@ def _build_parser() -> argparse.ArgumentParser:
     prune_retention.add_argument("--tenant-id", default="")
     prune_retention.add_argument("--batch-size", type=int, default=1000)
 
-    list_retention_runs = subparsers.add_parser("list-retention-runs", help="List recent retention prune runs for a tenant.")
+    list_retention_runs = subparsers.add_parser(
+        "list-retention-runs", help="List recent retention prune runs for a tenant."
+    )
     list_retention_runs.add_argument("--tenant-id", default="")
     list_retention_runs.add_argument("--limit", type=int, default=20)
 
@@ -3908,7 +4070,9 @@ def _build_parser() -> argparse.ArgumentParser:
     list_audit_events.add_argument("--resource-type", default="")
     list_audit_events.add_argument("--status", default="")
 
-    migrate_sqlite = subparsers.add_parser("migrate-sqlite", help="Export a SQLite graph and import it into the configured Neo4j backend.")
+    migrate_sqlite = subparsers.add_parser(
+        "migrate-sqlite", help="Export a SQLite graph and import it into the configured Neo4j backend."
+    )
     migrate_sqlite.add_argument("--db-path", required=True)
     migrate_sqlite.add_argument("--tenant-id", required=True)
 
@@ -3928,7 +4092,9 @@ def _build_parser() -> argparse.ArgumentParser:
     export_abhi.add_argument("--signing-key-dir", default="~/.waggle/keys")
     export_abhi.add_argument("--redact", dest="redact_patterns", action="append", default=[])
     export_abhi.add_argument("--passphrase-env", default="")
-    export_abhi.add_argument("--force", action="store_true", help="Export even if transcript secret scan finds likely credentials or tokens.")
+    export_abhi.add_argument(
+        "--force", action="store_true", help="Export even if transcript secret scan finds likely credentials or tokens."
+    )
 
     # git-vocabulary alias: waggle commit == waggle export
     commit_abhi = subparsers.add_parser(
@@ -3951,7 +4117,9 @@ def _build_parser() -> argparse.ArgumentParser:
     commit_abhi.add_argument("--signing-key-dir", default="~/.waggle/keys")
     commit_abhi.add_argument("--redact", dest="redact_patterns", action="append", default=[])
     commit_abhi.add_argument("--passphrase-env", default="")
-    commit_abhi.add_argument("--force", action="store_true", help="Commit even if transcript secret scan finds likely credentials or tokens.")
+    commit_abhi.add_argument(
+        "--force", action="store_true", help="Commit even if transcript secret scan finds likely credentials or tokens."
+    )
 
     checkpoint_context = subparsers.add_parser(
         "checkpoint-context",
@@ -3974,7 +4142,11 @@ def _build_parser() -> argparse.ArgumentParser:
     checkpoint_context.add_argument("--signing-key-dir", default="~/.waggle/keys")
     checkpoint_context.add_argument("--redact", dest="redact_patterns", action="append", default=[])
     checkpoint_context.add_argument("--passphrase-env", default="")
-    checkpoint_context.add_argument("--force", action="store_true", help="Checkpoint even if transcript secret scan finds likely credentials or tokens.")
+    checkpoint_context.add_argument(
+        "--force",
+        action="store_true",
+        help="Checkpoint even if transcript secret scan finds likely credentials or tokens.",
+    )
 
     clear_session = subparsers.add_parser(
         "clear-session",
@@ -4003,7 +4175,9 @@ def _build_parser() -> argparse.ArgumentParser:
     import_abhi.add_argument("input_path", nargs="?")
     import_abhi.add_argument("--input", dest="input_path_flag", default="")
     import_abhi.add_argument("--namespace", default="")
-    import_abhi.add_argument("--merge-strategy", choices=["skip-existing", "overwrite", "branch"], default="skip-existing")
+    import_abhi.add_argument(
+        "--merge-strategy", choices=["skip-existing", "overwrite", "branch"], default="skip-existing"
+    )
     import_abhi.add_argument("--verify-signature", action="store_true")
     import_abhi.add_argument("--read-only", action="store_true")
     import_abhi.add_argument("--reembed-on-mismatch", action="store_true")
@@ -4066,7 +4240,9 @@ def _build_parser() -> argparse.ArgumentParser:
     merge_abhi.add_argument("--left", dest="left_input_path_flag", default="")
     merge_abhi.add_argument("--right", dest="right_input_path_flag", default="")
     merge_abhi.add_argument("--output", dest="output_path", required=True)
-    merge_abhi.add_argument("--merge-strategy", choices=["prefer_right", "prefer_left", "last_write_wins"], default="prefer_right")
+    merge_abhi.add_argument(
+        "--merge-strategy", choices=["prefer_right", "prefer_left", "last_write_wins"], default="prefer_right"
+    )
 
     query_abhi = subparsers.add_parser(
         "query",
@@ -4115,7 +4291,11 @@ def _build_parser() -> argparse.ArgumentParser:
     push_abhi.add_argument("--include-embeddings", action=argparse.BooleanOptionalAction, default=True)
     push_abhi.add_argument("--encrypt", action=argparse.BooleanOptionalAction, default=True)
     push_abhi.add_argument("--passphrase-env", default="")
-    push_abhi.add_argument("--force", action="store_true", help="Export/upload even if transcript secret scan finds likely credentials or tokens.")
+    push_abhi.add_argument(
+        "--force",
+        action="store_true",
+        help="Export/upload even if transcript secret scan finds likely credentials or tokens.",
+    )
     push_abhi.add_argument("--folder-id", default="")
     push_abhi.add_argument("--remote-name", default="")
     push_abhi.add_argument("--client-secret-path", default="~/.waggle/google-client-secret.json")
@@ -4135,7 +4315,9 @@ def _build_parser() -> argparse.ArgumentParser:
     pull_abhi.add_argument("--token-path", default="")
     pull_abhi.add_argument("--open-browser", action=argparse.BooleanOptionalAction, default=True)
     pull_abhi.add_argument("--namespace", default="")
-    pull_abhi.add_argument("--merge-strategy", choices=["skip-existing", "overwrite", "branch"], default="skip-existing")
+    pull_abhi.add_argument(
+        "--merge-strategy", choices=["skip-existing", "overwrite", "branch"], default="skip-existing"
+    )
     pull_abhi.add_argument("--verify-signature", action="store_true")
     pull_abhi.add_argument("--read-only", action="store_true")
     pull_abhi.add_argument("--reembed-on-mismatch", action="store_true")
@@ -4290,7 +4472,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "WAGGLE_STARTUP_MODE, stdout encoding (Windows), and known API gotchas."
         ),
     )
-    doctor.add_argument("--fix", action="store_true", help="Re-embed stale transcript/node rows to the current model ID.")
+    doctor.add_argument(
+        "--fix", action="store_true", help="Re-embed stale transcript/node rows to the current model ID."
+    )
 
     demo_cmd = subparsers.add_parser(
         "demo",
@@ -4307,7 +4491,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Use the real sentence-transformers model instead of deterministic mode.",
     )
 
-    uninstall_hooks_cmd = subparsers.add_parser(
+    subparsers.add_parser(
         "uninstall-hooks",
         help="Remove the Waggle managed hooks block from Claude Code settings.",
         description="Idempotent: removes the waggle-managed block from ~/.claude/settings.json if present.",
@@ -4374,7 +4558,11 @@ def _run_admin_command(config: AppConfig, args: argparse.Namespace) -> int:
         )
         return 0
     if args.command == "list-api-keys":
-        print(json.dumps([_serialize_api_key_record(record) for record in backend.list_api_keys(args.tenant_id)], indent=2))
+        print(
+            json.dumps(
+                [_serialize_api_key_record(record) for record in backend.list_api_keys(args.tenant_id)], indent=2
+            )
+        )
         return 0
     if args.command == "revoke-api-key":
         tenant_backend = backend.for_tenant(getattr(args, "tenant_id", "") or config.default_tenant_id)
@@ -4389,7 +4577,13 @@ def _run_admin_command(config: AppConfig, args: argparse.Namespace) -> int:
         )
         print(json.dumps({"revoked": args.api_key_id}))
         return 0
-    if args.command in {"retention-status", "set-retention", "prune-retention", "list-retention-runs", "list-audit-events"}:
+    if args.command in {
+        "retention-status",
+        "set-retention",
+        "prune-retention",
+        "list-retention-runs",
+        "list-audit-events",
+    }:
         retention_backend = backend.for_tenant(getattr(args, "tenant_id", "") or config.default_tenant_id)
         policy_kwargs = {
             "default_enabled": config.retention_enabled,
@@ -4399,7 +4593,9 @@ def _run_admin_command(config: AppConfig, args: argparse.Namespace) -> int:
         if args.command == "retention-status":
             policy = retention_backend.get_retention_policy(**policy_kwargs)
             payload = _serialize_retention_policy(policy)
-            payload["recent_runs"] = [_serialize_retention_run(run) for run in retention_backend.list_retention_runs(limit=5)]
+            payload["recent_runs"] = [
+                _serialize_retention_run(run) for run in retention_backend.list_retention_runs(limit=5)
+            ]
             print(json.dumps(payload, indent=2))
             return 0
         if args.command == "set-retention":
@@ -4450,7 +4646,9 @@ def _run_admin_command(config: AppConfig, args: argparse.Namespace) -> int:
     if args.command == "migrate-sqlite":
         if config.backend != "neo4j":
             raise ValidationFailure("migrate-sqlite requires WAGGLE_BACKEND=neo4j for the target environment.")
-        source = MemoryGraph(args.db_path, EmbeddingModel(config.model_name), tenant_id=args.tenant_id, export_dir=config.export_dir)
+        source = MemoryGraph(
+            args.db_path, EmbeddingModel(config.model_name), tenant_id=args.tenant_id, export_dir=config.export_dir
+        )
         target = backend.for_tenant(args.tenant_id)
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
             temp_path = Path(handle.name)
@@ -4804,9 +5002,7 @@ def _run_doctor(config: AppConfig, *, fix: bool = False) -> int:
     print(_c(_BOLD, "\n[1] MCP client config files"))
     waggle_found_in: list[str] = []
     for label, template in _KNOWN_CONFIG_PATHS:
-        raw = template.replace("%APPDATA%", os.environ.get("APPDATA", "")).replace(
-            "%USERPROFILE%", str(Path.home())
-        )
+        raw = template.replace("%APPDATA%", os.environ.get("APPDATA", "")).replace("%USERPROFILE%", str(Path.home()))
         path = Path(raw).expanduser()
         if path.exists():
             try:
@@ -4825,9 +5021,14 @@ def _run_doctor(config: AppConfig, *, fix: bool = False) -> int:
             except Exception:
                 print(f"  {_c(_CYAN, chr(0x2022))} {label}\n     {path}  [exists, could not parse]")
         # only show missing paths that are plausible for this platform
-        elif (sys.platform == "darwin" and ("macOS" in label or "Cursor" in label or "Antigravity" in label or "Codex" in label)) or \
-             (sys.platform == "win32" and "Windows" in label) or \
-             (sys.platform.startswith("linux") and ("Linux" in label or "Cursor" in label)):
+        elif (
+            (
+                sys.platform == "darwin"
+                and ("macOS" in label or "Cursor" in label or "Antigravity" in label or "Codex" in label)
+            )
+            or (sys.platform == "win32" and "Windows" in label)
+            or (sys.platform.startswith("linux") and ("Linux" in label or "Cursor" in label))
+        ):
             print(f"  {_c(_CYAN, chr(0x2022))} {label}\n     {path}  [not found]")
 
     if not waggle_found_in:
@@ -4849,16 +5050,17 @@ def _run_doctor(config: AppConfig, *, fix: bool = False) -> int:
         _ok(f"DB directory exists (file will be created on first run): {db_path}")
         ok_items.append("DB directory writable")
     else:
-        issues.append(
-            f"DB directory does not exist: {db_dir}. "
-            "Create it with: mkdir -p <dir>"
-        )
+        issues.append(f"DB directory does not exist: {db_dir}. Create it with: mkdir -p <dir>")
         _fail(f"DB directory missing: {db_dir}")
 
     # ── 3. Embedding model ───────────────────────────────────────────────────
     print(_c(_BOLD, "\n[3] Embedding model"))
     model_name = config.model_name
-    hf_home = os.environ.get("HF_HOME") or os.environ.get("SENTENCE_TRANSFORMERS_HOME") or str(Path.home() / ".cache" / "huggingface")
+    hf_home = (
+        os.environ.get("HF_HOME")
+        or os.environ.get("SENTENCE_TRANSFORMERS_HOME")
+        or str(Path.home() / ".cache" / "huggingface")
+    )
     st_cache = Path(os.environ.get("SENTENCE_TRANSFORMERS_HOME", Path(hf_home) / "hub"))
 
     if model_name.strip().lower() in {"fake", "fake-model", "deterministic", "offline-demo"}:
@@ -5145,6 +5347,7 @@ def _default_stdio_command() -> str:
 
 # ── client config writers ────────────────────────────────────────────────────
 
+
 def _write_claude_desktop(db_path: str, python_exe: str) -> Path:
     """Write ~/.config/claude/claude_desktop_config.json (macOS/Linux)."""
     if sys.platform == "darwin":
@@ -5156,10 +5359,8 @@ def _write_claude_desktop(db_path: str, python_exe: str) -> Path:
 
     existing: dict = {}
     if config_file.exists():
-        try:
+        with suppress(json.JSONDecodeError):
             existing = json.loads(config_file.read_text())
-        except json.JSONDecodeError:
-            pass
 
     existing.setdefault("mcpServers", {})
     existing["mcpServers"]["waggle"] = {
@@ -5184,10 +5385,8 @@ def _write_cursor(db_path: str, python_exe: str) -> Path:
 
     existing: dict = {}
     if config_file.exists():
-        try:
+        with suppress(json.JSONDecodeError):
             existing = json.loads(config_file.read_text())
-        except json.JSONDecodeError:
-            pass
 
     existing.setdefault("mcpServers", {})
     existing["mcpServers"]["waggle"] = {
@@ -5212,10 +5411,8 @@ def _write_gemini(db_path: str, python_exe: str) -> Path:
 
     existing: dict = {}
     if config_file.exists():
-        try:
+        with suppress(json.JSONDecodeError):
             existing = json.loads(config_file.read_text())
-        except json.JSONDecodeError:
-            pass
 
     existing.setdefault("mcpServers", {})
     existing["mcpServers"]["waggle"] = {
@@ -5244,10 +5441,8 @@ def _write_antigravity(db_path: str, python_exe: str) -> Path:
 
     existing: dict = {}
     if config_file.exists():
-        try:
+        with suppress(json.JSONDecodeError):
             existing = json.loads(config_file.read_text())
-        except json.JSONDecodeError:
-            pass
 
     existing.setdefault("mcpServers", {})
     existing["mcpServers"]["waggle"] = {
@@ -5270,20 +5465,18 @@ def _write_codex(db_path: str, python_exe: str) -> Path:
     config_dir.mkdir(parents=True, exist_ok=True)
     config_file = config_dir / "config.toml"
     toml_block = (
-        '[mcp_servers.waggle]\n'
+        "[mcp_servers.waggle]\n"
         f'command = "{_default_stdio_command()}"\n'
         'args = ["serve", "--transport", "stdio"]\n'
-        '\n'
-        '[mcp_servers.waggle.env]\n'
+        "\n"
+        "[mcp_servers.waggle.env]\n"
         'WAGGLE_BACKEND = "sqlite"\n'
         f'WAGGLE_DB_PATH = "{db_path}"\n'
         'WAGGLE_DEFAULT_TENANT_ID = "local-default"\n'
         'WAGGLE_MODEL = "all-MiniLM-L6-v2"\n'
     )
     existing = config_file.read_text() if config_file.exists() else ""
-    pattern = re.compile(
-        r"(?ms)^\[mcp_servers\.waggle\]\n.*?(?=^\[(?!mcp_servers\.waggle(?:\.env)?\])[^\n]+\]\n|\Z)"
-    )
+    pattern = re.compile(r"(?ms)^\[mcp_servers\.waggle\]\n.*?(?=^\[(?!mcp_servers\.waggle(?:\.env)?\])[^\n]+\]\n|\Z)")
     replacement = toml_block.rstrip() + "\n"
     if pattern.search(existing):
         updated = pattern.sub(replacement, existing, count=1)
@@ -5419,9 +5612,9 @@ _CLAUDE_HOOKS_BLOCK_FOOTER = "# <<< waggle-managed <<<"
 
 def _hooks_block(hook_dir: Path) -> str:
     """Build the managed hooks JSON block for Claude Code settings."""
-    pre_response = str(hook_dir / "pre_response.py")
-    post_response = str(hook_dir / "post_response.py")
-    pre_compact = str(hook_dir / "pre_compact.py")
+    str(hook_dir / "pre_response.py")
+    str(hook_dir / "post_response.py")
+    str(hook_dir / "pre_compact.py")
     return (
         f"{_CLAUDE_HOOKS_BLOCK_HEADER}\n"
         "# Waggle automatic memory hooks — do not edit this block manually.\n"
@@ -5514,11 +5707,9 @@ def _install_claude_hooks(hook_dir: Path, *, dry_run: bool = False) -> Path | No
     for event, entries in hook_data["hooks"].items():
         # Remove any existing waggle entries for this event
         existing_entries = [
-            e for e in existing_hooks.get(event, [])
-            if not any(
-                "waggle" in str(h.get("command", ""))
-                for h in e.get("hooks", [])
-            )
+            e
+            for e in existing_hooks.get(event, [])
+            if not any("waggle" in str(h.get("command", "")) for h in e.get("hooks", []))
         ]
         existing_entries.extend(entries)
         existing_hooks[event] = existing_entries
@@ -5546,11 +5737,7 @@ def _uninstall_claude_hooks() -> Path | None:
     changed = False
     for event in list(hooks.keys()):
         filtered = [
-            e for e in hooks[event]
-            if not any(
-                "waggle" in str(h.get("command", ""))
-                for h in e.get("hooks", [])
-            )
+            e for e in hooks[event] if not any("waggle" in str(h.get("command", "")) for h in e.get("hooks", []))
         ]
         if len(filtered) != len(hooks[event]):
             changed = True
@@ -5579,7 +5766,6 @@ def _run_uninstall_hooks() -> int:
 
 def _run_demo(args: argparse.Namespace) -> int:
     """Run the 60-second local demo with the bundled example graph."""
-    import shutil as _shutil
 
     with_embeddings = bool(getattr(args, "with_embeddings", False))
     model_name = "all-MiniLM-L6-v2" if with_embeddings else "deterministic"
@@ -5637,7 +5823,9 @@ def _run_demo(args: argparse.Namespace) -> int:
 
         # ── Query 2: What changed about the database decision? ────────────────
         print(_c(_BOLD, "Query 2: What changed about the database decision?"))
-        result2 = graph.query(query="What changed about the database decision? contradiction superseded", max_nodes=8, max_depth=2)
+        result2 = graph.query(
+            query="What changed about the database decision? contradiction superseded", max_nodes=8, max_depth=2
+        )
         # Show contradiction/update edges
         contradiction_edges = [e for e in result2.edges if e.relationship in ("contradicts", "updates")]
         if contradiction_edges:
@@ -5686,7 +5874,7 @@ def _run_demo(args: argparse.Namespace) -> int:
         print()
 
         # ── Graph Studio URL ──────────────────────────────────────────────────
-        studio_url = f"http://127.0.0.1:8686/graph?mode=view"
+        studio_url = "http://127.0.0.1:8686/graph?mode=view"
         print(_c(_CYAN, "─" * 50))
         print(f"  Graph Studio: {studio_url}")
         print(f"  (run 'WAGGLE_DB_PATH={demo_db} waggle-mcp ui' to open it)")
@@ -5697,6 +5885,7 @@ def _run_demo(args: argparse.Namespace) -> int:
     except Exception as exc:
         _fail(f"Demo failed: {exc}")
         import traceback
+
         traceback.print_exc()
         return 1
 
@@ -5721,7 +5910,7 @@ def _run_setup(args: argparse.Namespace) -> int:
     print(f"  database: {db_path}")
     print(f"  model: {args.model}")
     if args.dry_run:
-        print(f"  mode: dry-run")
+        print("  mode: dry-run")
         for client in clients:
             _ok(f"Would configure {client}")
         if args.project_instructions and "Codex" in clients:

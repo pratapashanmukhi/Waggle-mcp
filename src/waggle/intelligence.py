@@ -4,7 +4,7 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
 
 from waggle.models import Node, NodeType, RelationType, utc_now
@@ -14,47 +14,195 @@ from waggle.models import Node, NodeType, RelationType, utc_now
 # function words that NLTK's corpus includes.  Update this set rather than
 # importing nltk if the list needs to grow.
 _STOPWORDS = {
-    "a", "about", "above", "after", "again", "against", "all", "also", "am",
-    "an", "and", "any", "are", "aren't", "as", "at",
-    "be", "because", "been", "before", "being", "below", "between", "both",
-    "but", "by",
-    "can", "can't", "cannot", "could", "couldn't",
-    "did", "didn't", "do", "does", "doesn't", "doing", "don't", "down",
+    "a",
+    "about",
+    "above",
+    "after",
+    "again",
+    "against",
+    "all",
+    "also",
+    "am",
+    "an",
+    "and",
+    "any",
+    "are",
+    "aren't",
+    "as",
+    "at",
+    "be",
+    "because",
+    "been",
+    "before",
+    "being",
+    "below",
+    "between",
+    "both",
+    "but",
+    "by",
+    "can",
+    "can't",
+    "cannot",
+    "could",
+    "couldn't",
+    "did",
+    "didn't",
+    "do",
+    "does",
+    "doesn't",
+    "doing",
+    "don't",
+    "down",
     "during",
     "each",
-    "few", "for", "from", "further",
-    "get", "got",
-    "had", "hadn't", "has", "hasn't", "have", "haven't", "having", "he",
-    "he'd", "he'll", "he's", "her", "here", "here's", "hers", "herself",
-    "him", "himself", "his", "how", "how's",
-    "i", "i'd", "i'll", "i'm", "i've", "if", "in", "into", "is", "isn't",
-    "it", "it's", "its", "itself",
+    "few",
+    "for",
+    "from",
+    "further",
+    "get",
+    "got",
+    "had",
+    "hadn't",
+    "has",
+    "hasn't",
+    "have",
+    "haven't",
+    "having",
+    "he",
+    "he'd",
+    "he'll",
+    "he's",
+    "her",
+    "here",
+    "here's",
+    "hers",
+    "herself",
+    "him",
+    "himself",
+    "his",
+    "how",
+    "how's",
+    "i",
+    "i'd",
+    "i'll",
+    "i'm",
+    "i've",
+    "if",
+    "in",
+    "into",
+    "is",
+    "isn't",
+    "it",
+    "it's",
+    "its",
+    "itself",
     "just",
     "let's",
-    "me", "more", "most", "mustn't", "my", "myself",
-    "no", "nor", "not", "now",
-    "of", "off", "on", "once", "only", "or", "other", "ought", "our",
-    "ours", "ourselves", "out", "over", "own",
-    "same", "shan't", "she", "she'd", "she'll", "she's", "should",
-    "shouldn't", "so", "some", "such",
-    "than", "that", "that's", "the", "their", "theirs", "them",
-    "themselves", "then", "there", "there's", "these", "they", "they'd",
-    "they'll", "they're", "they've", "this", "those", "through", "to",
+    "me",
+    "more",
+    "most",
+    "mustn't",
+    "my",
+    "myself",
+    "no",
+    "nor",
+    "not",
+    "now",
+    "of",
+    "off",
+    "on",
+    "once",
+    "only",
+    "or",
+    "other",
+    "ought",
+    "our",
+    "ours",
+    "ourselves",
+    "out",
+    "over",
+    "own",
+    "same",
+    "shan't",
+    "she",
+    "she'd",
+    "she'll",
+    "she's",
+    "should",
+    "shouldn't",
+    "so",
+    "some",
+    "such",
+    "than",
+    "that",
+    "that's",
+    "the",
+    "their",
+    "theirs",
+    "them",
+    "themselves",
+    "then",
+    "there",
+    "there's",
+    "these",
+    "they",
+    "they'd",
+    "they'll",
+    "they're",
+    "they've",
+    "this",
+    "those",
+    "through",
+    "to",
     "too",
-    "under", "until", "up",
+    "under",
+    "until",
+    "up",
     "very",
-    "was", "wasn't", "we", "we'd", "we'll", "we're", "we've", "were",
-    "weren't", "what", "what's", "when", "when's", "where", "where's",
-    "which", "while", "who", "who's", "whom", "why", "why's", "will",
-    "with", "won't", "would", "wouldn't",
-    "you", "you'd", "you'll", "you're", "you've", "your", "yours",
-    "yourself", "yourselves",
+    "was",
+    "wasn't",
+    "we",
+    "we'd",
+    "we'll",
+    "we're",
+    "we've",
+    "were",
+    "weren't",
+    "what",
+    "what's",
+    "when",
+    "when's",
+    "where",
+    "where's",
+    "which",
+    "while",
+    "who",
+    "who's",
+    "whom",
+    "why",
+    "why's",
+    "will",
+    "with",
+    "won't",
+    "would",
+    "wouldn't",
+    "you",
+    "you'd",
+    "you'll",
+    "you're",
+    "you've",
+    "your",
+    "yours",
+    "yourself",
+    "yourselves",
 }
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _LIST_PREFIX_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s*")
 _QUESTION_PREFIX_RE = re.compile(r"^(why|what|how|when|where|who|which|can|could|should|do|does|did|is|are)\b")
-_FILE_PATH_RE = re.compile(r"\b(?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]+\b|\b[\w.-]+\.(?:py|ts|tsx|js|jsx|rs|go|java|kt|rb|php|md|json|yaml|yml|toml|sql)\b")
+_FILE_PATH_RE = re.compile(
+    r"\b(?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]+\b|\b[\w.-]+\.(?:py|ts|tsx|js|jsx|rs|go|java|kt|rb|php|md|json|yaml|yml|toml|sql)\b"
+)
 _ENTITY_RE = re.compile(r"\b(?:[A-Z]{2,}[A-Z0-9]*|[A-Z][a-z]+(?:[A-Z][A-Za-z0-9]+)+|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b")
 _PREFERENCE_RE = re.compile(
     r"\b(?:"
@@ -288,16 +436,8 @@ def canonical_concept_overlap(a: str, b: str) -> float:
     """Return overlap across curated paraphrase concepts used by memory dedup."""
     left = normalize_text(a)
     right = normalize_text(b)
-    left_concepts = {
-        concept
-        for concept, aliases in _CONCEPT_ALIASES
-        if any(alias in left for alias in aliases)
-    }
-    right_concepts = {
-        concept
-        for concept, aliases in _CONCEPT_ALIASES
-        if any(alias in right for alias in aliases)
-    }
+    left_concepts = {concept for concept, aliases in _CONCEPT_ALIASES if any(alias in left for alias in aliases)}
+    right_concepts = {concept for concept, aliases in _CONCEPT_ALIASES if any(alias in right for alias in aliases)}
     if not left_concepts or not right_concepts:
         return 0.0
     return len(left_concepts & right_concepts) / len(left_concepts | right_concepts)
@@ -323,13 +463,13 @@ def describes_rejected_or_limited_option(text: str) -> bool:
 # - fact nodes carry precise numeric/technical values — merge conservatively
 # - concept/entity are structural anchors — be very conservative
 _TYPE_DEDUP_THRESHOLD: dict[NodeType, float] = {
-    NodeType.DECISION:   0.82,
+    NodeType.DECISION: 0.82,
     NodeType.PREFERENCE: 0.82,
-    NodeType.NOTE:       0.85,
-    NodeType.QUESTION:   0.88,
-    NodeType.FACT:       0.92,
-    NodeType.CONCEPT:    0.95,
-    NodeType.ENTITY:     0.97,
+    NodeType.NOTE: 0.85,
+    NodeType.QUESTION: 0.88,
+    NodeType.FACT: 0.92,
+    NodeType.CONCEPT: 0.95,
+    NodeType.ENTITY: 0.97,
 }
 
 
@@ -433,8 +573,18 @@ def contains_conflicting_numbers(a: str, b: str) -> bool:
 def contains_conflicting_months(a: str, b: str) -> bool:
     """Return True if both texts name different months."""
     month_names = {
-        "january", "february", "march", "april", "may", "june",
-        "july", "august", "september", "october", "november", "december",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
     }
     months_a = tokenize_text(a) & month_names
     months_b = tokenize_text(b) & month_names
@@ -608,8 +758,8 @@ def infer_relationship(
     If neither condition is met, ``None`` is returned and no edge is created.
     Unconnected nodes are still reachable via the verbatim transcript layer.
     """
-    shared_tokens = shared_tokens if shared_tokens is not None else (
-        tokenize_text(source.content) & tokenize_text(target.content)
+    shared_tokens = (
+        shared_tokens if shared_tokens is not None else (tokenize_text(source.content) & tokenize_text(target.content))
     )
     pair_text = f"{normalize_text(source.content)} {normalize_text(target.content)}"
 
@@ -636,7 +786,7 @@ def infer_relationship(
 
 
 def parse_since_value(value: str, *, now: datetime | None = None) -> datetime:
-    now = (now or utc_now()).astimezone(timezone.utc)
+    now = (now or utc_now()).astimezone(UTC)
     raw = value.strip().lower()
     if not raw:
         raise ValueError("Time range cannot be empty.")
@@ -670,13 +820,13 @@ def parse_since_value(value: str, *, now: datetime | None = None) -> datetime:
     except ValueError as exc:
         raise ValueError(f"Unsupported time range: {value}") from exc
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def infer_temporal_hints(query: str, *, now: datetime | None = None) -> TemporalQueryHints:
     lowered = normalize_text(query)
-    now = (now or utc_now()).astimezone(timezone.utc)
+    now = (now or utc_now()).astimezone(UTC)
     if "last week" in lowered:
         return TemporalQueryHints(since=now - timedelta(days=7), recency_mode="recent")
     if "last month" in lowered:
@@ -697,7 +847,7 @@ def infer_temporal_hints(query: str, *, now: datetime | None = None) -> Temporal
 
 
 def temporal_score_adjustment(node: Node, hints: TemporalQueryHints, *, now: datetime | None = None) -> float:
-    now = (now or utc_now()).astimezone(timezone.utc)
+    now = (now or utc_now()).astimezone(UTC)
     age_days = max((now - node.updated_at).total_seconds() / 86400.0, 0.0)
     if hints.recency_mode in {"recent", "latest"}:
         return 0.12 * math.exp(-age_days / 7.0)
@@ -964,7 +1114,13 @@ def _extract_structured_observation_candidates(sentence: str, *, speaker: str) -
     if sentence.strip().endswith("?") or _QUESTION_PREFIX_RE.match(lowered):
         return candidates
 
-    if _HEDGED_RE.search(sentence) and (_DECISION_RE.search(sentence) or _PREFERENCE_RE.search(sentence) or _ALWAYS_USE_RE.search(sentence) or _GO_TO_PREFERENCE_RE.search(sentence) or _REVISIT_RE.search(sentence)):
+    if _HEDGED_RE.search(sentence) and (
+        _DECISION_RE.search(sentence)
+        or _PREFERENCE_RE.search(sentence)
+        or _ALWAYS_USE_RE.search(sentence)
+        or _GO_TO_PREFERENCE_RE.search(sentence)
+        or _REVISIT_RE.search(sentence)
+    ):
         hedge_tags = [*tags, "hedged"]
         if _CONDITIONAL_RE.search(sentence):
             hedge_tags.append("conditional")
@@ -1047,8 +1203,8 @@ def _extract_structured_observation_candidates(sentence: str, *, speaker: str) -
                 "content": f"JWT tokens expire in {duration}.",
                 "node_type": NodeType.FACT,
                 "tags": [*tags, "auth"],
-                }
-            )
+            }
+        )
 
     rate_limit_match = _RATE_LIMIT_RE.search(sentence)
     if rate_limit_match:

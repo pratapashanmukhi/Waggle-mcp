@@ -39,9 +39,7 @@ class TokenLimitExceededError(Exception):
         self.tokens_used = tokens_used
         self.token_limit = token_limit
         self.partial_answer = partial_answer
-        super().__init__(
-            message or f"Token limit exceeded: {tokens_used:,} of {token_limit:,} tokens"
-        )
+        super().__init__(message or f"Token limit exceeded: {tokens_used:,} of {token_limit:,} tokens")
 
 
 class ErrorThresholdExceededError(Exception):
@@ -59,10 +57,7 @@ class ErrorThresholdExceededError(Exception):
         self.threshold = threshold
         self.last_error = last_error
         self.partial_answer = partial_answer
-        super().__init__(
-            message
-            or f"Error threshold exceeded: {error_count} consecutive errors (limit: {threshold})"
-        )
+        super().__init__(message or f"Error threshold exceeded: {error_count} consecutive errors (limit: {threshold})")
 
 
 class CancellationError(Exception):

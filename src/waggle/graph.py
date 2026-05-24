@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import hashlib
 import heapq
 import json
@@ -11,11 +10,11 @@ import re
 import sqlite3
 import threading
 import time
-from collections import deque
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any
 from uuid import uuid4
 
 import networkx as nx
@@ -25,8 +24,8 @@ from waggle.abhi import (
     ABHI_ENCRYPTION_ALGORITHM,
     ABHI_SPEC_VERSION,
     abhi_to_snapshot,
-    dispatch_abhi_event,
     diff_abhi_files,
+    dispatch_abhi_event,
     filter_snapshot_by_scope,
     inspect_abhi_document,
     load_abhi_chunk_file,
@@ -40,15 +39,16 @@ from waggle.abhi import (
 from waggle.auth import api_key_prefix, generate_api_key, hash_api_key, verify_api_key
 from waggle.context_bundle import build_context_bundle, build_query_summary, export_context_bundle_files
 from waggle.embeddings import EmbeddingModel
-from waggle.evidence import build_observation_evidence, merge_evidence_records, merge_validity_windows
 from waggle.errors import AuthenticationError, ValidationFailure
+from waggle.evidence import build_observation_evidence, merge_evidence_records, merge_validity_windows
 from waggle.intelligence import (
-    compatible_node_types,
+    TYPED_EDGE_CONFIDENCE,
     canonical_concept_overlap,
+    compatible_node_types,
     contains_conflicting_months,
     contains_conflicting_numbers,
-    describes_rejected_or_limited_option,
     content_token_jaccard,
+    describes_rejected_or_limited_option,
     detect_conflict_reason,
     extract_choice_entity,
     extract_conversation_candidates,
@@ -68,8 +68,8 @@ from waggle.intelligence import (
     tokenize_text,
     type_aware_dedup_threshold,
     within_time_window,
-    TYPED_EDGE_CONFIDENCE,
 )
+from waggle.locks import ProcessLock
 from waggle.markdown_vault import (
     evidence_from_lines,
     iter_vault_documents,
@@ -90,17 +90,22 @@ from waggle.models import (
     ApiKeyRecord,
     AuditEventRecord,
     BackupResult,
+    CanonicalizeResult,
+    ClearScopeResult,
     ConflictEntry,
     ConflictListResult,
-    ContextWindow,
-    ContextWindowEdge,
     ConflictRecord,
     ConnectedNodeStat,
     ContextBundleExportResult,
     ContextScopeResult,
     ContextTimelineItem,
+    ContextWindow,
+    ContextWindowEdge,
+    DedupCandidatePair,
+    DedupCandidatesResult,
     Edge,
     EvidenceRecord,
+    FusionHit,
     GraphDiffResult,
     GraphStats,
     HybridHit,
@@ -113,30 +118,25 @@ from waggle.models import (
     NodeType,
     ObservationResult,
     PrimeContextResult,
-    FusionHit,
-    ReplayHit,
     RecentNodeStat,
     RelationType,
+    ReplayHit,
     RetentionPolicyRecord,
     RetentionPruneRunRecord,
     SubgraphResult,
+    TenantRecord,
+    TimelineResult,
+    TopicCluster,
+    TopicResult,
     TranscriptIngestionInput,
     TranscriptIngestionResult,
     TranscriptMessage,
     TranscriptRecord,
     normalize_relationship,
-    TenantRecord,
-    TimelineResult,
-    TopicCluster,
-    TopicResult,
-    CanonicalizeResult,
-    ClearScopeResult,
-    DedupCandidatePair,
-    DedupCandidatesResult,
     utc_now,
 )
 from waggle.retrieval.hybrid import HybridRetrievalConfig, HybridRetriever
-from waggle.locks import ProcessLock
+
 SCHEMA_VERSION = 7
 
 LOGGER = logging.getLogger(__name__)
@@ -151,6 +151,7 @@ class ExpansionMeta:
 
 class _NeutralTemporalHints:
     """Neutral temporal hints for operations without query-driven time intent."""
+
     recency_mode: str = "none"
     time_window_start = None
     time_window_end = None
@@ -270,11 +271,13 @@ QUERY_ALIAS_TERMS: tuple[tuple[str, str], ...] = (
     ("fastapi", "fastapi async concurrency realtime websockets"),
 )
 
-MUST_PAIR_RELATIONS: frozenset[str] = frozenset({
-    "contradicts",
-    "updates",
-    "depends_on",
-})
+MUST_PAIR_RELATIONS: frozenset[str] = frozenset(
+    {
+        "contradicts",
+        "updates",
+        "depends_on",
+    }
+)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -521,8 +524,8 @@ RELATION_WEIGHTS: dict[str, float] = {
 def _parse_datetime(raw: str) -> datetime:
     value = datetime.fromisoformat(raw)
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _valid_to_enforcement_enabled() -> bool:
@@ -546,7 +549,7 @@ def _filter_valid_nodes(
     nodes: list[Node],
     *,
     include_invalidated: bool = False,
-    as_of: Optional[datetime] = None,
+    as_of: datetime | None = None,
 ) -> list[Node]:
     """Filter *nodes* according to temporal validity windows.
 
@@ -565,9 +568,10 @@ def _filter_valid_nodes(
     if as_of is not None:
         # Ensure as_of is timezone-aware
         if as_of.tzinfo is None:
-            as_of = as_of.replace(tzinfo=timezone.utc)
+            as_of = as_of.replace(tzinfo=UTC)
         return [
-            node for node in nodes
+            node
+            for node in nodes
             if (node.valid_from is None or node.valid_from <= as_of)
             and (node.valid_to is None or node.valid_to > as_of)
         ]
@@ -575,11 +579,8 @@ def _filter_valid_nodes(
     if include_invalidated:
         return nodes
 
-    now = datetime.now(timezone.utc)
-    return [
-        node for node in nodes
-        if node.valid_to is None or node.valid_to > now
-    ]
+    now = datetime.now(UTC)
+    return [node for node in nodes if node.valid_to is None or node.valid_to > now]
 
 
 def _encode_evidence_records(records: list[EvidenceRecord]) -> str:
@@ -664,7 +665,11 @@ def _scope_matches(node: Node, *, agent_id: str = "", project: str = "", session
         return False
     if normalized_project:
         project_tags = {str(tag).strip().lower() for tag in node.tags}
-        if node.project.strip().lower() != normalized_project and normalized_project not in project_tags and f"project:{normalized_project}" not in project_tags:
+        if (
+            node.project.strip().lower() != normalized_project
+            and normalized_project not in project_tags
+            and f"project:{normalized_project}" not in project_tags
+        ):
             return False
     return True
 
@@ -722,74 +727,73 @@ class MemoryGraph:
 
     def _connect(self, timeout: float = 30.0) -> sqlite3.Connection:
         """Connect to the SQLite database with WAL mode and cross-process safety.
-        
+
         Args:
             timeout: Connection timeout in seconds (default 30.0).
-        
+
         Returns:
             A configured sqlite3.Connection with WAL mode enabled.
         """
         connection = sqlite3.connect(str(self.db_path), timeout=timeout)
         connection.row_factory = sqlite3.Row
-        
+
         # WAL mode: enables concurrent reads while maintaining single-writer safety
         connection.execute("PRAGMA journal_mode=WAL")
-        
+
         # NORMAL: fsync at transaction end (vs FULL which fsyncs at each statement)
         # This balances durability with performance for multi-process access
         connection.execute("PRAGMA synchronous=NORMAL")
-        
+
         # Increase busy_timeout for multi-process contention
         # 30 seconds is reasonable for cross-process locks
         connection.execute("PRAGMA busy_timeout=30000")
-        
+
         # Enforce foreign key constraints
         connection.execute("PRAGMA foreign_keys=ON")
-        
+
         return connection
 
     def _initialize_database(self) -> None:
         """Initialize the database schema, migrations, and WAL mode.
-        
+
         Performs one-time setup including:
         1. Bootstrap WAL mode if database exists in rollback mode
         2. Create schema if new
         3. Run legacy migrations
         4. Create indexes
         5. Ensure tenant record exists
-        
+
         Uses ProcessLock to protect multi-statement migration from concurrent access.
         """
         # Wrap migration in cross-process lock to prevent concurrent schema modifications
         lock_path = str(self.db_path) + ".lock"
-        with ProcessLock(lock_path):
-            with self._lock, self._connect() as connection:
-                # Bootstrap WAL: if db file exists but is in rollback mode, migrate it
-                try:
-                    journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
-                    if journal_mode.upper() != "WAL":
-                        LOGGER.info(f"Migrating database {self.db_path} from {journal_mode} to WAL mode")
-                        connection.execute("PRAGMA journal_mode=WAL")
-                except Exception as e:
-                    LOGGER.warning(f"Could not verify journal mode: {e}")
-                
-                # Initialize schema
-                connection.executescript(SCHEMA_SQL)
-                self._migrate_legacy_schema(connection)
-                connection.executescript(INDEX_SQL)
-                
-                # Ensure tenant record
-                created_at = utc_now().isoformat()
-                connection.execute(
-                    """
+        with ProcessLock(lock_path), self._lock, self._connect() as connection:
+            # Bootstrap WAL: if db file exists but is in rollback mode, migrate it
+            try:
+                journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+                if journal_mode.upper() != "WAL":
+                    LOGGER.info(f"Migrating database {self.db_path} from {journal_mode} to WAL mode")
+                    connection.execute("PRAGMA journal_mode=WAL")
+            except Exception as e:
+                LOGGER.warning(f"Could not verify journal mode: {e}")
+
+            # Initialize schema
+            connection.executescript(SCHEMA_SQL)
+            self._migrate_legacy_schema(connection)
+            connection.executescript(INDEX_SQL)
+
+            # Ensure tenant record
+            created_at = utc_now().isoformat()
+            connection.execute(
+                """
                     INSERT INTO tenants (tenant_id, name, status, created_at)
                     VALUES (?, '', 'active', ?)
                     ON CONFLICT(tenant_id) DO NOTHING
                     """,
-                    (self.tenant_id, created_at),
-                )
+                (self.tenant_id, created_at),
+            )
 
-    def for_tenant(self, tenant_id: str) -> "MemoryGraph":
+    def for_tenant(self, tenant_id: str) -> MemoryGraph:
         clone = object.__new__(MemoryGraph)
         clone.db_path = self.db_path
         clone.embedding_model = self.embedding_model
@@ -1076,7 +1080,9 @@ class MemoryGraph:
         )
         next_enabled = current.enabled if enabled is None else bool(enabled)
         next_retention_days = current.retention_days if retention_days is None else int(retention_days)
-        next_prune_interval_hours = current.prune_interval_hours if prune_interval_hours is None else int(prune_interval_hours)
+        next_prune_interval_hours = (
+            current.prune_interval_hours if prune_interval_hours is None else int(prune_interval_hours)
+        )
         if next_retention_days < 1:
             raise ValidationFailure("Retention days must be at least 1.")
         if next_prune_interval_hours < 1:
@@ -1330,9 +1336,7 @@ class MemoryGraph:
                 """ALTER TABLE api_keys ADD COLUMN scopes TEXT DEFAULT '["graph:read","graph:write","admin:read","admin:write"]'"""
             )
         if "tenant_id" not in node_columns:
-            connection.execute(
-                f"ALTER TABLE nodes ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '{self.tenant_id}'"
-            )
+            connection.execute(f"ALTER TABLE nodes ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '{self.tenant_id}'")
             connection.execute("UPDATE nodes SET tenant_id = ? WHERE tenant_id = ''", (self.tenant_id,))
         if "evidence_records" not in node_columns:
             connection.execute("ALTER TABLE nodes ADD COLUMN evidence_records TEXT DEFAULT '[]'")
@@ -1360,15 +1364,13 @@ class MemoryGraph:
         if "aliases" not in node_columns:
             connection.execute("ALTER TABLE nodes ADD COLUMN aliases TEXT DEFAULT '[]'")
         if "tenant_id" not in edge_columns:
-            connection.execute(
-                f"ALTER TABLE edges ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '{self.tenant_id}'"
-            )
+            connection.execute(f"ALTER TABLE edges ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '{self.tenant_id}'")
             connection.execute("UPDATE edges SET tenant_id = ? WHERE tenant_id = ''", (self.tenant_id,))
-        transcript_columns = {row["name"] for row in connection.execute("PRAGMA table_info(transcript_records)").fetchall()}
+        transcript_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(transcript_records)").fetchall()
+        }
         if "message_identity" not in transcript_columns:
-            connection.execute(
-                "ALTER TABLE transcript_records ADD COLUMN message_identity TEXT DEFAULT NULL"
-            )
+            connection.execute("ALTER TABLE transcript_records ADD COLUMN message_identity TEXT DEFAULT NULL")
         if "embedding_model_id" not in transcript_columns:
             connection.execute("ALTER TABLE transcript_records ADD COLUMN embedding_model_id TEXT DEFAULT ''")
         if "embedding_dim" not in transcript_columns:
@@ -1709,8 +1711,14 @@ class MemoryGraph:
                     else:
                         turn_pair_id = str(uuid4())
 
-                content_hash = str(row["content_hash"] or "").strip() or _normalized_content_hash(row["transcript_text"])
-                if row["embedding"] is None or not str(row["embedding_model_id"] or "").strip() or int(row["embedding_dim"] or 0) <= 0:
+                content_hash = str(row["content_hash"] or "").strip() or _normalized_content_hash(
+                    row["transcript_text"]
+                )
+                if (
+                    row["embedding"] is None
+                    or not str(row["embedding_model_id"] or "").strip()
+                    or int(row["embedding_dim"] or 0) <= 0
+                ):
                     embedding, model_id, dim = self._embed_with_metadata(row["transcript_text"])
                     embedding_bytes = self.embedding_model.to_bytes(embedding)
                 else:
@@ -1773,8 +1781,9 @@ class MemoryGraph:
                 """,
                 (self.tenant_id,),
             ).fetchall()
-            transcript_stale = int(connection.execute(
-                """
+            transcript_stale = int(
+                connection.execute(
+                    """
                 SELECT COUNT(*)
                 FROM transcript_records
                 WHERE tenant_id = ?
@@ -1785,10 +1794,12 @@ class MemoryGraph:
                     OR embedding_model_id != ?
                   )
                 """,
-                (self.tenant_id, self._current_embedding_model_id()),
-            ).fetchone()[0])
-            node_stale = int(connection.execute(
-                """
+                    (self.tenant_id, self._current_embedding_model_id()),
+                ).fetchone()[0]
+            )
+            node_stale = int(
+                connection.execute(
+                    """
                 SELECT COUNT(*)
                 FROM nodes
                 WHERE tenant_id = ?
@@ -1799,8 +1810,9 @@ class MemoryGraph:
                     OR embedding_model_id != ?
                   )
                 """,
-                (self.tenant_id, self._current_embedding_model_id()),
-            ).fetchone()[0])
+                    (self.tenant_id, self._current_embedding_model_id()),
+                ).fetchone()[0]
+            )
         return {
             "current_model_id": self._current_embedding_model_id(),
             "transcript_model_counts": {str(row["embedding_model_id"]): int(row["count"]) for row in transcript_rows},
@@ -1812,20 +1824,19 @@ class MemoryGraph:
 
     def reembed_stale_embeddings(self, *, batch_size: int = 100) -> dict[str, int]:
         """Re-embed stale transcript records and nodes in batch.
-        
+
         This is a multi-statement batch operation that updates many rows.
         Uses ProcessLock to protect from concurrent updates across processes.
         """
         transcript_updated = 0
         node_updated = 0
         current_model_id = self._current_embedding_model_id()
-        
+
         lock_path = str(self.db_path) + ".lock"
-        with ProcessLock(lock_path):
-            with self._lock, self._connect() as connection:
-                while True:
-                    transcript_rows = connection.execute(
-                        """
+        with ProcessLock(lock_path), self._lock, self._connect() as connection:
+            while True:
+                transcript_rows = connection.execute(
+                    """
                         SELECT id, transcript_text
                         FROM transcript_records
                         WHERE tenant_id = ?
@@ -1838,32 +1849,32 @@ class MemoryGraph:
                         ORDER BY observed_at ASC, turn_index ASC, id ASC
                         LIMIT ?
                         """,
-                        (self.tenant_id, current_model_id, batch_size),
-                    ).fetchall()
-                    if not transcript_rows:
-                        break
-                    for row in transcript_rows:
-                        embedding, model_id, dim = self._embed_with_metadata(row["transcript_text"])
-                        connection.execute(
-                            """
+                    (self.tenant_id, current_model_id, batch_size),
+                ).fetchall()
+                if not transcript_rows:
+                    break
+                for row in transcript_rows:
+                    embedding, model_id, dim = self._embed_with_metadata(row["transcript_text"])
+                    connection.execute(
+                        """
                             UPDATE transcript_records
                             SET embedding = ?, embedding_model_id = ?, embedding_dim = ?, content_hash = ?
                             WHERE tenant_id = ? AND id = ?
                             """,
-                            (
-                                self.embedding_model.to_bytes(embedding),
-                                model_id,
-                                dim,
-                                _normalized_content_hash(row["transcript_text"]),
-                                self.tenant_id,
-                                row["id"],
-                            ),
-                        )
-                        transcript_updated += 1
+                        (
+                            self.embedding_model.to_bytes(embedding),
+                            model_id,
+                            dim,
+                            _normalized_content_hash(row["transcript_text"]),
+                            self.tenant_id,
+                            row["id"],
+                        ),
+                    )
+                    transcript_updated += 1
 
-                while True:
-                    node_rows = connection.execute(
-                        """
+            while True:
+                node_rows = connection.execute(
+                    """
                         SELECT id, content
                         FROM nodes
                         WHERE tenant_id = ?
@@ -1876,27 +1887,28 @@ class MemoryGraph:
                         ORDER BY updated_at ASC, id ASC
                         LIMIT ?
                         """,
-                        (self.tenant_id, current_model_id, batch_size),
-                    ).fetchall()
-                    if not node_rows:
-                        break
-                    for row in node_rows:
-                        embedding, model_id, dim = self._embed_with_metadata(row["content"])
-                        connection.execute(
-                            """
+                    (self.tenant_id, current_model_id, batch_size),
+                ).fetchall()
+                if not node_rows:
+                    break
+                for row in node_rows:
+                    embedding, model_id, dim = self._embed_with_metadata(row["content"])
+                    connection.execute(
+                        """
                             UPDATE nodes
                             SET embedding = ?, embedding_model_id = ?, embedding_dim = ?
                             WHERE tenant_id = ? AND id = ?
                             """,
-                            (self.embedding_model.to_bytes(embedding), model_id, dim, self.tenant_id, row["id"]),
-                        )
-                        node_updated += 1
+                        (self.embedding_model.to_bytes(embedding), model_id, dim, self.tenant_id, row["id"]),
+                    )
+                    node_updated += 1
         return {"transcript_rows_updated": transcript_updated, "node_rows_updated": node_updated}
 
     def ensure_repo(self, project: str = "", connection: sqlite3.Connection | None = None) -> str:
         name = project.strip() or "default"
         repo_id = f"{self.tenant_id}:{slugify(name)}"
         now = utc_now().isoformat()
+
         def _ensure(active_connection: sqlite3.Connection) -> str:
             active_connection.execute(
                 """
@@ -1927,6 +1939,7 @@ class MemoryGraph:
         resolved_repo_id = repo_id or self.ensure_repo("default", connection=connection)
         window_id = f"{resolved_repo_id}:{slugify(normalized_session)}"
         now = utc_now().isoformat()
+
         def _ensure(active_connection: sqlite3.Connection) -> str:
             active_connection.execute(
                 """
@@ -2199,9 +2212,13 @@ class MemoryGraph:
             NodeType.PREFERENCE: 3,
             NodeType.CONCEPT: 4,
         }
-        nodes.sort(key=lambda node: (type_rank.get(node.node_type, 99), -node.updated_at.timestamp(), node.label.lower()))
+        nodes.sort(
+            key=lambda node: (type_rank.get(node.node_type, 99), -node.updated_at.timestamp(), node.label.lower())
+        )
         if len(nodes) > 100:
-            LOGGER.warning("context_window_embedding_truncated", extra={"window_id": window_id, "node_count": len(nodes)})
+            LOGGER.warning(
+                "context_window_embedding_truncated", extra={"window_id": window_id, "node_count": len(nodes)}
+            )
             nodes = nodes[:100]
         window_text = " | ".join(f"{node.label}: {node.content}" for node in nodes)
         if not window_text.strip():
@@ -2321,7 +2338,9 @@ class MemoryGraph:
         if not current_entities:
             return []
 
-        current_by_label = {entity["label"].strip().lower(): entity for entity in current_entities if entity["label"].strip()}
+        current_by_label = {
+            entity["label"].strip().lower(): entity for entity in current_entities if entity["label"].strip()
+        }
         if not current_by_label:
             return []
 
@@ -2332,7 +2351,9 @@ class MemoryGraph:
 
         for other_window in other_windows:
             other_entities = self.extract_window_entities(other_window.id)
-            other_by_label = {entity["label"].strip().lower(): entity for entity in other_entities if entity["label"].strip()}
+            other_by_label = {
+                entity["label"].strip().lower(): entity for entity in other_entities if entity["label"].strip()
+            }
             overlap = set(current_by_label) & set(other_by_label)
             if not overlap:
                 continue
@@ -2398,12 +2419,16 @@ class MemoryGraph:
     ) -> NodeStoreResult:
         resolved_context_window_id = context_window_id
         if resolved_context_window_id is None:
-            _, resolved_context_window_id = self.resolve_window_context(project=project, session_id=session_id, connection=connection)
+            _, resolved_context_window_id = self.resolve_window_context(
+                project=project, session_id=session_id, connection=connection
+            )
         node_kwargs: dict[str, Any] = {}
         if node_id is not None and str(node_id).strip():
             node_kwargs["id"] = str(node_id).strip()
         embedding_vector, embedding_model_id, embedding_dim = (
-            self._embed_with_metadata(content) if embedding is None else (embedding, self._current_embedding_model_id(), int(embedding.shape[0]))
+            self._embed_with_metadata(content)
+            if embedding is None
+            else (embedding, self._current_embedding_model_id(), int(embedding.shape[0]))
         )
         if embedding_dim <= 0:
             raise ValueError("Node writes require embedding_dim metadata.")
@@ -2535,7 +2560,7 @@ class MemoryGraph:
         weight: float = 1.0,
         metadata: dict[str, Any] | None = None,
         connection: sqlite3.Connection | None = None,
-        ) -> Edge:
+    ) -> Edge:
         edge_kwargs: dict[str, Any] = {}
         if edge_id is not None and str(edge_id).strip():
             edge_kwargs["id"] = str(edge_id).strip()
@@ -2585,7 +2610,9 @@ class MemoryGraph:
                 ),
             )
             if edge.relationship in {RelationType.UPDATES.value, RelationType.CONTRADICTS.value}:
-                self._mark_node_superseded(active_connection, old_node=target_node, new_node=source_node, relationship=edge.relationship)
+                self._mark_node_superseded(
+                    active_connection, old_node=target_node, new_node=source_node, relationship=edge.relationship
+                )
             return edge
 
         if connection is not None:
@@ -2680,7 +2707,7 @@ class MemoryGraph:
         *,
         edge_id: str,
         resolution_note: str = "",
-        winner: Optional[str] = None,
+        winner: str | None = None,
     ) -> ConflictEntry:
         with self._lock, self._connect() as connection:
             row = connection.execute(
@@ -2731,8 +2758,7 @@ class MemoryGraph:
                 winning_node = self.get_node(winning_id)
                 now = utc_now()
                 LOGGER.info(
-                    "resolve_conflict: superseding node %s (loser) in favour of %s (winner) "
-                    "via edge %s (%s) at %s",
+                    "resolve_conflict: superseding node %s (loser) in favour of %s (winner) via edge %s (%s) at %s",
                     losing_id,
                     winning_id,
                     edge_id,
@@ -2790,7 +2816,7 @@ class MemoryGraph:
         session_id: str = "",
         retrieval_mode: str = "graph",
         include_invalidated: bool = False,
-        as_of: Optional[datetime] = None,
+        as_of: datetime | None = None,
     ) -> SubgraphResult:
         query_text = query.strip()
         if not query_text:
@@ -2807,7 +2833,9 @@ class MemoryGraph:
         if normalized_mode == "hybrid_no_rerank":
             normalized_mode = "hybrid"
         if normalized_mode not in {"graph", "verbatim", "hybrid"}:
-            raise ValueError("retrieval_mode must be one of: graph, verbatim, hybrid, hybrid_no_rerank (benchmark modes: graph_only, verbatim_only).")
+            raise ValueError(
+                "retrieval_mode must be one of: graph, verbatim, hybrid, hybrid_no_rerank (benchmark modes: graph_only, verbatim_only)."
+            )
 
         if normalized_mode in {"verbatim", "hybrid"}:
             hybrid = self.hybrid_retriever()
@@ -2841,16 +2869,16 @@ class MemoryGraph:
             )
             if self.tiered_retrieval and project.strip()
             else self._query_graph_only(
-                    query=query_text,
-                    max_nodes=max_nodes,
-                    max_depth=max_depth,
-                    expand_depth=expand_depth,
-                    agent_id=agent_id,
-                    project=project,
-                    session_id=session_id,
-                    include_invalidated=include_invalidated,
-                    as_of=as_of,
-                )
+                query=query_text,
+                max_nodes=max_nodes,
+                max_depth=max_depth,
+                expand_depth=expand_depth,
+                agent_id=agent_id,
+                project=project,
+                session_id=session_id,
+                include_invalidated=include_invalidated,
+                as_of=as_of,
+            )
             if normalized_mode in {"graph", "fusion"}
             else None
         )
@@ -2940,7 +2968,7 @@ class MemoryGraph:
         project: str = "",
         session_id: str = "",
         include_invalidated: bool = False,
-        as_of: Optional[datetime] = None,
+        as_of: datetime | None = None,
     ) -> SubgraphResult:
         if max_nodes < 1:
             raise ValueError("max_nodes must be at least 1.")
@@ -3003,7 +3031,7 @@ class MemoryGraph:
             if query.strip():
                 expanded_query = self._expand_query_aliases(query)
                 query_embedding = self.embedding_model.embed(expanded_query)
-                
+
                 scored_candidates = []
                 for node in candidates:
                     similarity = 0.0
@@ -3011,7 +3039,7 @@ class MemoryGraph:
                     if emb is not None:
                         similarity = max(self.embedding_model.cosine_similarity(query_embedding, emb), 0.0)
                     scored_candidates.append((similarity, node))
-                
+
                 scored_candidates.sort(key=lambda item: item[0], reverse=True)
                 selected_nodes = [node for _, node in scored_candidates[:max_nodes]]
             else:
@@ -3047,7 +3075,7 @@ class MemoryGraph:
                             FROM nodes
                             WHERE tenant_id = ? AND id IN ({placeholders})
                             """,
-                            (self.tenant_id, *missing_ids)
+                            (self.tenant_id, *missing_ids),
                         ).fetchall()
                         for row in missing_rows:
                             selected_nodes.append(self._row_to_node(row))
@@ -3126,7 +3154,9 @@ class MemoryGraph:
             return fallback
 
         window_scores.sort(key=lambda item: (item[0], item[1].updated_at.timestamp()), reverse=True)
-        selected_windows = [window for _, window in window_scores[: max(1, top_k_windows or self.tiered_retrieval_top_k_windows)]]
+        selected_windows = [
+            window for _, window in window_scores[: max(1, top_k_windows or self.tiered_retrieval_top_k_windows)]
+        ]
         selected_window_ids = {window.id for window in selected_windows}
 
         with self._lock, self._connect() as connection:
@@ -3166,7 +3196,9 @@ class MemoryGraph:
             for row in candidate_rows:
                 node = self._row_to_node(row)
                 semantic = max(
-                    self.embedding_model.cosine_similarity(query_embedding, self.embedding_model.from_bytes(row["embedding"])),
+                    self.embedding_model.cosine_similarity(
+                        query_embedding, self.embedding_model.from_bytes(row["embedding"])
+                    ),
                     0.0,
                 )
                 lexical = self._lexical_score_for_node(query_text, node)
@@ -3231,7 +3263,9 @@ class MemoryGraph:
         if max_depth < 0:
             raise ValueError("max_depth cannot be negative.")
 
-        normalized_mode = {"replay": "verbatim", "fusion": "hybrid"}.get(retrieval_mode.strip().lower(), retrieval_mode.strip().lower())
+        normalized_mode = {"replay": "verbatim", "fusion": "hybrid"}.get(
+            retrieval_mode.strip().lower(), retrieval_mode.strip().lower()
+        )
         if normalized_mode in {"hybrid", "verbatim"}:
             debug = self.hybrid_retriever().retrieve_debug(
                 query=query_text,
@@ -3366,11 +3400,9 @@ class MemoryGraph:
             "embedding_preview": [round(float(value), 6) for value in query_embedding[:5]],
             "windows_evaluated": len(window_details),
             "all_windows": window_details,
-            "selected_windows": [
-                window
-                for window in window_details
-                if window["routing_score"] is not None
-            ][: max(1, self.tiered_retrieval_top_k_windows)],
+            "selected_windows": [window for window in window_details if window["routing_score"] is not None][
+                : max(1, self.tiered_retrieval_top_k_windows)
+            ],
             "flat_top_nodes": [summarize_node(node) for node in flat_result.nodes[:max_nodes]],
             "tiered_top_nodes": [summarize_node(node) for node in tiered_result.nodes[:max_nodes]],
             "tiered_result_mode": tiered_result.retrieval_mode,
@@ -3387,7 +3419,7 @@ class MemoryGraph:
         project: str,
         session_id: str,
         include_invalidated: bool = False,
-        as_of: Optional[datetime] = None,
+        as_of: datetime | None = None,
     ) -> SubgraphResult:
         with self._lock, self._connect() as connection:
             temporal_hints = infer_temporal_hints(query)
@@ -3470,21 +3502,18 @@ class MemoryGraph:
                 for node_id, similarity in similarity_by_id.items()
             }
             lexical_by_id = {
-                node_id: self._lexical_score_for_node(expanded_query, node)
-                for node_id, node in nodes_by_id.items()
+                node_id: self._lexical_score_for_node(expanded_query, node) for node_id, node in nodes_by_id.items()
             }
             negation_intent = self._has_negation_intent(query)
             negation_boost_by_id = {
-                node_id: self._negation_boost(node) if negation_intent else 0.0
-                for node_id, node in nodes_by_id.items()
+                node_id: self._negation_boost(node) if negation_intent else 0.0 for node_id, node in nodes_by_id.items()
             }
 
             seed_count = min(total_nodes, max(1, max_nodes // 2))
             seed_candidates = [
                 (
                     node_id,
-                    (0.7 * similarity_by_id.get(node_id, 0.0))
-                    + (0.3 * lexical_by_id.get(node_id, 0.0)),
+                    (0.7 * similarity_by_id.get(node_id, 0.0)) + (0.3 * lexical_by_id.get(node_id, 0.0)),
                     negation_boost_by_id.get(node_id, 0.0),
                     self._seed_temporal_order(nodes_by_id[node_id], temporal_hints),
                 )
@@ -3663,7 +3692,12 @@ class MemoryGraph:
             session_id=session_id,
         )
         hits = build_hits(active_session_id)
-        return [item[1] for item in sorted(hits, key=lambda item: (-item[0], -item[1].observed_at.timestamp(), item[1].turn_index))[:max_hits]]
+        return [
+            item[1]
+            for item in sorted(hits, key=lambda item: (-item[0], -item[1].observed_at.timestamp(), item[1].turn_index))[
+                :max_hits
+            ]
+        ]
 
     def _query_replay_session_scores(
         self,
@@ -3699,7 +3733,7 @@ class MemoryGraph:
             return {}
 
         query_vector = query_embedding if query_embedding is not None else self.embedding_model.embed(query)
-        active_session_id = _retrieval_session_scope(
+        _retrieval_session_scope(
             agent_id=agent_id,
             project=project,
             session_id=session_id,
@@ -3761,7 +3795,9 @@ class MemoryGraph:
         scores_by_session: dict[str, float] = {}
         for row in rows:
             record = self._row_to_transcript_record(row)
-            if not self._transcript_scope_matches(record, agent_id=agent_id, project=project, session_id=active_session_id):
+            if not self._transcript_scope_matches(
+                record, agent_id=agent_id, project=project, session_id=active_session_id
+            ):
                 continue
             scoped_session_id = record.session_id.strip()
             if not scoped_session_id:
@@ -3868,8 +3904,9 @@ class MemoryGraph:
                        created_at, updated_at, access_count, tenant_id
                 FROM nodes
                 WHERE tenant_id = ?
-                """
-            , (self.tenant_id,)).fetchall()
+                """,
+                (self.tenant_id,),
+            ).fetchall()
             nodes_by_id = {row["id"]: self._row_to_node(row) for row in node_rows}
             graph = self._load_graph(connection, node_ids=nodes_by_id.keys())
             related_ids = list(self._expand_node_depths(graph, [node_id], max_depth))
@@ -4022,13 +4059,7 @@ class MemoryGraph:
         weight: float | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Edge:
-        if (
-            source_id is None
-            and target_id is None
-            and relationship is None
-            and weight is None
-            and metadata is None
-        ):
+        if source_id is None and target_id is None and relationship is None and weight is None and metadata is None:
             raise ValueError("At least one field must be provided for edge update.")
 
         with self._lock, self._connect() as connection:
@@ -4350,10 +4381,14 @@ class MemoryGraph:
                 connection.execute("SELECT COUNT(*) FROM repos WHERE tenant_id = ?", (self.tenant_id,)).fetchone()[0]
             )
             total_context_windows = int(
-                connection.execute("SELECT COUNT(*) FROM context_windows WHERE tenant_id = ?", (self.tenant_id,)).fetchone()[0]
+                connection.execute(
+                    "SELECT COUNT(*) FROM context_windows WHERE tenant_id = ?", (self.tenant_id,)
+                ).fetchone()[0]
             )
             total_context_window_edges = int(
-                connection.execute("SELECT COUNT(*) FROM context_window_edges WHERE tenant_id = ?", (self.tenant_id,)).fetchone()[0]
+                connection.execute(
+                    "SELECT COUNT(*) FROM context_window_edges WHERE tenant_id = ?", (self.tenant_id,)
+                ).fetchone()[0]
             )
             windows_with_embeddings = int(
                 connection.execute(
@@ -4368,10 +4403,7 @@ class MemoryGraph:
                 ).fetchone()[0]
             )
 
-            counts = {
-                node_type.value: 0
-                for node_type in NodeType
-            }
+            counts = {node_type.value: 0 for node_type in NodeType}
             for row in connection.execute(
                 "SELECT node_type, COUNT(*) AS count FROM nodes WHERE tenant_id = ? GROUP BY node_type",
                 (self.tenant_id,),
@@ -4403,8 +4435,9 @@ class MemoryGraph:
                 GROUP BY n.id
                 ORDER BY connection_count DESC, n.updated_at DESC
                 LIMIT 5
-                """
-            , (self.tenant_id, self.tenant_id)).fetchall()
+                """,
+                (self.tenant_id, self.tenant_id),
+            ).fetchall()
 
             most_recent_rows = connection.execute(
                 """
@@ -4413,8 +4446,9 @@ class MemoryGraph:
                 WHERE tenant_id = ?
                 ORDER BY updated_at DESC, created_at DESC
                 LIMIT 5
-                """
-            , (self.tenant_id,)).fetchall()
+                """,
+                (self.tenant_id,),
+            ).fetchall()
 
             return GraphStats(
                 total_nodes=total_nodes,
@@ -4479,9 +4513,9 @@ class MemoryGraph:
             ).fetchall()
 
         # Optionally filter by scope
-        scope_agent = agent_id.strip().lower()
-        scope_project = project.strip().lower()
-        scope_session = session_id.strip().lower()
+        agent_id.strip().lower()
+        project.strip().lower()
+        session_id.strip().lower()
 
         by_type: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
@@ -4539,16 +4573,18 @@ class MemoryGraph:
                 FROM nodes
                 WHERE tenant_id = ?
                 ORDER BY updated_at DESC, created_at DESC
-                """
-            , (self.tenant_id,)).fetchall()
+                """,
+                (self.tenant_id,),
+            ).fetchall()
             edge_rows = connection.execute(
                 """
                 SELECT id, source_id, target_id, relationship, weight, metadata, created_at
                 FROM edges
                 WHERE tenant_id = ?
                 ORDER BY created_at ASC
-                """
-            , (self.tenant_id,)).fetchall()
+                """,
+                (self.tenant_id,),
+            ).fetchall()
 
         if output_path is None:
             self.export_dir.mkdir(parents=True, exist_ok=True)
@@ -4633,8 +4669,9 @@ class MemoryGraph:
         windows = self.get_repo_windows(repo_id, include_archived=True)
         window_ids = {window.id for window in windows}
         with self._lock, self._connect() as connection:
-            edge_rows = connection.execute(
-                """
+            edge_rows = (
+                connection.execute(
+                    """
                 SELECT id, tenant_id, source_window_id, target_window_id, edge_type,
                        shared_entities, weight, metadata, created_at
                 FROM context_window_edges
@@ -4643,11 +4680,14 @@ class MemoryGraph:
                   AND target_window_id IN ({})
                 ORDER BY created_at ASC
                 """.format(
-                    ", ".join("?" for _ in window_ids) or "NULL",
-                    ", ".join("?" for _ in window_ids) or "NULL",
-                ),
-                (self.tenant_id, *window_ids, *window_ids),
-            ).fetchall() if window_ids else []
+                        ", ".join("?" for _ in window_ids) or "NULL",
+                        ", ".join("?" for _ in window_ids) or "NULL",
+                    ),
+                    (self.tenant_id, *window_ids, *window_ids),
+                ).fetchall()
+                if window_ids
+                else []
+            )
         edges = [self._row_to_context_window_edge(row) for row in edge_rows]
 
         if output_path is None:
@@ -4683,7 +4723,9 @@ class MemoryGraph:
         }
 
         for window in windows:
-            connected_edges = [edge for edge in edges if edge.source_window_id == window.id or edge.target_window_id == window.id]
+            connected_edges = [
+                edge for edge in edges if edge.source_window_id == window.id or edge.target_window_id == window.id
+            ]
             label = window.title or window.session_id or window.id
             title_lines = [
                 f"<b>{label}</b>",
@@ -4846,7 +4888,9 @@ class MemoryGraph:
             raise ValidationFailure("format must be one of: markdown, json, both.")
         if normalized_audience not in {"llm", "human"}:
             raise ValidationFailure("audience must be one of: llm, human.")
-        normalized_retrieval_mode = {"replay": "verbatim", "fusion": "hybrid"}.get(normalized_retrieval_mode, normalized_retrieval_mode)
+        normalized_retrieval_mode = {"replay": "verbatim", "fusion": "hybrid"}.get(
+            normalized_retrieval_mode, normalized_retrieval_mode
+        )
         if normalized_retrieval_mode not in {"graph", "verbatim", "hybrid"}:
             raise ValidationFailure("retrieval_mode must be one of: graph, verbatim, hybrid.")
         if normalized_mode == "query" and not query.strip():
@@ -4856,7 +4900,9 @@ class MemoryGraph:
 
         replay_hits: list[ReplayHit] = []
         if normalized_mode == "prime":
-            selected = self.prime_context(project=project, agent_id=agent_id, session_id=session_id, max_nodes=max_nodes)
+            selected = self.prime_context(
+                project=project, agent_id=agent_id, session_id=session_id, max_nodes=max_nodes
+            )
             selected_nodes = selected.nodes
             selected_edges = selected.edges if include_edges else []
             summary = selected.summary
@@ -5101,12 +5147,15 @@ class MemoryGraph:
                         ):
                             result.edges_deleted += 1
                         continue
-                    if self._find_existing_edge(
-                        connection,
-                        source_id=source_node.id,
-                        target_id=target_node.id,
-                        relationship=relation.relationship,
-                    ) is None:
+                    if (
+                        self._find_existing_edge(
+                            connection,
+                            source_id=source_node.id,
+                            target_id=target_node.id,
+                            relationship=relation.relationship,
+                        )
+                        is None
+                    ):
                         self._insert_edge_record(
                             connection,
                             source_id=source_node.id,
@@ -5201,7 +5250,9 @@ class MemoryGraph:
     def diff_abhi(self, *, input_path_a: str | Path, input_path_b: str | Path) -> AbhiDiffResult:
         return diff_abhi_files(input_path_a=input_path_a, input_path_b=input_path_b)
 
-    def query_abhi(self, *, input_path: str | Path, query_id: str = "", query_text: str = "", passphrase: str = "") -> AbhiQueryResult:
+    def query_abhi(
+        self, *, input_path: str | Path, query_id: str = "", query_text: str = "", passphrase: str = ""
+    ) -> AbhiQueryResult:
         return query_abhi_file(input_path=input_path, query_id=query_id, query_text=query_text, passphrase=passphrase)
 
     def load_abhi_chunks(
@@ -5485,9 +5536,7 @@ class MemoryGraph:
                     result.conflicts.append(conflict)
 
         decision_nodes = [
-            (node, tags)
-            for node, tags in stored_candidate_records
-            if node.node_type == NodeType.DECISION
+            (node, tags) for node, tags in stored_candidate_records if node.node_type == NodeType.DECISION
         ]
         rationale_nodes = [
             (node, tags)
@@ -5495,9 +5544,17 @@ class MemoryGraph:
             if "decision-rationale" in tags and node.node_type == NodeType.FACT
         ]
         for decision_node, decision_tags in decision_nodes:
-            decision_categories = {tag for tag in decision_tags if tag in {"database", "backend-framework", "frontend-framework", "auth-mechanism", "api-style"}}
+            decision_categories = {
+                tag
+                for tag in decision_tags
+                if tag in {"database", "backend-framework", "frontend-framework", "auth-mechanism", "api-style"}
+            }
             for rationale_node, rationale_tags in rationale_nodes:
-                rationale_categories = {tag for tag in rationale_tags if tag in {"database", "backend-framework", "frontend-framework", "auth-mechanism", "api-style"}}
+                rationale_categories = {
+                    tag
+                    for tag in rationale_tags
+                    if tag in {"database", "backend-framework", "frontend-framework", "auth-mechanism", "api-style"}
+                }
                 if rationale_categories and decision_categories and not (rationale_categories & decision_categories):
                     continue
                 self.add_edge(
@@ -5531,7 +5588,7 @@ class MemoryGraph:
             source_text = normalize_text(f"{source_node.label} {source_node.content}")
             source_categories = {tag for tag in source_tags if tag in category_tags}
             source_tokens = tokenize_text(source_node.content)
-            for target_node, target_tags in stored_candidate_records[index + 1:]:
+            for target_node, target_tags in stored_candidate_records[index + 1 :]:
                 if source_node.id == target_node.id:
                     continue
 
@@ -5541,13 +5598,33 @@ class MemoryGraph:
 
                 edge_specs: list[tuple[str, str, RelationType, str, float]] = []
                 if target_node.node_type == NodeType.ENTITY and normalize_text(target_node.label) in source_text:
-                    edge_specs.append((source_node.id, target_node.id, RelationType.RELATES_TO, "entity-mention", TYPED_EDGE_CONFIDENCE))
+                    edge_specs.append(
+                        (
+                            source_node.id,
+                            target_node.id,
+                            RelationType.RELATES_TO,
+                            "entity-mention",
+                            TYPED_EDGE_CONFIDENCE,
+                        )
+                    )
                 if source_node.node_type == NodeType.ENTITY and normalize_text(source_node.label) in target_text:
-                    edge_specs.append((target_node.id, source_node.id, RelationType.RELATES_TO, "entity-mention", TYPED_EDGE_CONFIDENCE))
+                    edge_specs.append(
+                        (
+                            target_node.id,
+                            source_node.id,
+                            RelationType.RELATES_TO,
+                            "entity-mention",
+                            TYPED_EDGE_CONFIDENCE,
+                        )
+                    )
 
                 shared_tokens = source_tokens & target_tokens
                 has_shared_category = bool(source_categories & target_categories)
-                if not edge_specs and source_node.node_type != NodeType.ENTITY and target_node.node_type != NodeType.ENTITY:
+                if (
+                    not edge_specs
+                    and source_node.node_type != NodeType.ENTITY
+                    and target_node.node_type != NodeType.ENTITY
+                ):
                     if len(shared_tokens) >= 2 or has_shared_category:
                         inferred = infer_relationship(
                             source_node,
@@ -5557,7 +5634,9 @@ class MemoryGraph:
                         )
                         if inferred is not None:
                             rel_type, confidence = inferred
-                            reason = "shared-category" if has_shared_category and len(shared_tokens) < 2 else "shared-tokens"
+                            reason = (
+                                "shared-category" if has_shared_category and len(shared_tokens) < 2 else "shared-tokens"
+                            )
                             edge_specs.append((source_node.id, target_node.id, rel_type, reason, confidence))
 
                 for from_id, to_id, relationship, reason, confidence in edge_specs:
@@ -5583,19 +5662,19 @@ class MemoryGraph:
         session_id: str = "",
     ) -> ObservationResult:
         """Observe a completed user-assistant turn with verbatim-first persistence.
-        
+
         Follows new architecture:
         1. PERSIST verbatim turn first (mandatory). If this fails, the call fails.
         2. RUN extraction in try/except. If it raises, log and continue (non-fatal).
         3. RETURN structured result with turn_id, verbatim_stored, nodes_extracted, edges_inferred, extraction_errors.
-        
+
         Uses ProcessLock to protect multi-statement transaction from concurrent access.
         """
         logger = logging.getLogger(__name__)
         transcript = f"user: {user_message.strip()}\nassistant: {assistant_response.strip()}".strip()
         observed_at = utc_now()
         turn_pair_id = str(uuid4())
-        
+
         result = ObservationResult(
             turn_id=turn_pair_id,
             verbatim_stored=False,
@@ -5603,7 +5682,7 @@ class MemoryGraph:
             edges_inferred=0,
             extraction_errors=[],
         )
-        
+
         # Wrap multi-statement operations in cross-process lock
         lock_path = str(self.db_path) + ".lock"
         with ProcessLock(lock_path):
@@ -5636,7 +5715,7 @@ class MemoryGraph:
                     connection.rollback()
                     logger.exception(f"Failed to persist verbatim turn {turn_pair_id}: {verbatim_err}")
                     raise
-                
+
                 # ===== STEP 2: RUN EXTRACTION IN TRY/EXCEPT (NON-BLOCKING) =====
                 extraction_candidates = []
                 try:
@@ -5646,9 +5725,11 @@ class MemoryGraph:
                     )
                 except Exception as extraction_err:
                     logger.exception(f"Extraction failed for turn {turn_pair_id}: {extraction_err}")
-                    result.extraction_errors.append(f"Extraction exception: {type(extraction_err).__name__}: {str(extraction_err)}")
+                    result.extraction_errors.append(
+                        f"Extraction exception: {type(extraction_err).__name__}: {extraction_err!s}"
+                    )
                     # Continue: verbatim is stored, extraction is optional enrichment
-                
+
                 # ===== STEP 3: APPLY EXTRACTED CANDIDATES (IF ANY) =====
                 if extraction_candidates:
                     try:
@@ -5669,34 +5750,42 @@ class MemoryGraph:
                         result.created_count = candidates_result.created_count
                         result.reused_count = candidates_result.reused_count
                         result.conflicts = candidates_result.conflicts
-                        result.nodes_extracted = len([n for n in candidates_result.stored_nodes if candidates_result.created_count > 0])
+                        result.nodes_extracted = len(
+                            [n for n in candidates_result.stored_nodes if candidates_result.created_count > 0]
+                        )
                         # Count edges created in _apply_observation_candidates (decision->rationale, RELATES_TO, etc.)
                         # This is a heuristic: for now count edges that involve extracted nodes
-                        result.edges_inferred = len(candidates_result.conflicts)  # conflicts are one type of inferred relation
+                        result.edges_inferred = len(
+                            candidates_result.conflicts
+                        )  # conflicts are one type of inferred relation
                     except Exception as candidate_err:
                         logger.exception(f"Candidate application failed for turn {turn_pair_id}: {candidate_err}")
-                        result.extraction_errors.append(f"Candidate storage exception: {type(candidate_err).__name__}: {str(candidate_err)}")
+                        result.extraction_errors.append(
+                            f"Candidate storage exception: {type(candidate_err).__name__}: {candidate_err!s}"
+                        )
                         # Continue: verbatim persists regardless
-                
+
                 # ===== STEP 4: WINDOW CONTEXT AND EDGES (SAME AS BEFORE) =====
                 try:
-                    repo_id, window_id = self.resolve_window_context(project=project, session_id=session_id, connection=connection)
+                    repo_id, window_id = self.resolve_window_context(
+                        project=project, session_id=session_id, connection=connection
+                    )
                     self._update_window_node_count(connection, window_id)
                     self._mark_window_embedding_stale(connection, window_id)
                 except Exception as window_err:
                     logger.warning(f"Window context update failed for turn {turn_pair_id}: {window_err}")
-                    result.extraction_errors.append(f"Window context error: {str(window_err)}")
+                    result.extraction_errors.append(f"Window context error: {window_err!s}")
                     window_id = ""
                     repo_id = ""
-            
+
             # Derive edges outside the transaction lock
             if window_id and repo_id:
                 try:
                     self.derive_context_window_edges(window_id, repo_id)
                 except Exception as edge_err:
                     logger.warning(f"Context window edge derivation failed for turn {turn_pair_id}: {edge_err}")
-                    result.extraction_errors.append(f"Edge derivation error: {str(edge_err)}")
-        
+                    result.extraction_errors.append(f"Edge derivation error: {edge_err!s}")
+
         return result
 
     # ---------------------------------------------------------------------------
@@ -5718,12 +5807,14 @@ class MemoryGraph:
         """
         if msg.message_id:
             return msg.message_id
-        payload = "\x00".join([
-            msg.role,
-            msg.content,
-            str(raw_position),
-            msg.timestamp or "",
-        ])
+        payload = "\x00".join(
+            [
+                msg.role,
+                msg.content,
+                str(raw_position),
+                msg.timestamp or "",
+            ]
+        )
         return "fp:" + hashlib.sha256(payload.encode()).hexdigest()
 
     @staticmethod
@@ -5831,9 +5922,7 @@ class MemoryGraph:
         with ProcessLock(lock_path):
             newly_written_identities: set[str] = set()
             with self._lock, self._connect() as connection:
-                base_turn_index = self._next_transcript_turn_index(
-                    connection, session_id=payload.session_id
-                )
+                base_turn_index = self._next_transcript_turn_index(connection, session_id=payload.session_id)
                 for raw_pos, msg in enumerate(payload.messages):
                     identity = self._message_fingerprint(msg, raw_pos)
                     written = self._store_transcript_record(
@@ -5896,9 +5985,7 @@ class MemoryGraph:
             # Step 4: Build session-scoped extractive blocks, each tagged with
             # has_new_message=True iff any row in that block was newly written this run.
             # (role, joined_content, first_turn_index, has_new_message)
-            session_blocks = self._build_session_extractive_blocks(
-                session_rows, newly_written_identities
-            )
+            session_blocks = self._build_session_extractive_blocks(session_rows, newly_written_identities)
 
             # Step 5: Scan blocks left to right; only extract turns where at least
             # one of the two blocks (user or assistant) has a new message.
@@ -6034,7 +6121,7 @@ class MemoryGraph:
             added_nodes = [
                 self._row_to_node(row)
                 for row in connection.execute(
-                """
+                    """
                 SELECT id, agent_id, project, session_id, label, content, node_type, tags, source_prompt, metadata, evidence_records, valid_from, valid_to,
                        created_at, updated_at, access_count, tenant_id
                 FROM nodes
@@ -6047,7 +6134,7 @@ class MemoryGraph:
             updated_nodes = [
                 self._row_to_node(row)
                 for row in connection.execute(
-                """
+                    """
                     SELECT id, agent_id, project, session_id, label, content, node_type, tags, source_prompt, metadata, evidence_records, valid_from, valid_to,
                            created_at, updated_at, access_count, tenant_id
                     FROM nodes
@@ -6177,19 +6264,15 @@ class MemoryGraph:
             )
 
             # Build candidate nodes from expansion
-            candidate_nodes = [
-                nodes_by_id[nid]
-                for nid in expanded_depths
-                if nid in nodes_by_id
-            ]
+            candidate_nodes = [nodes_by_id[nid] for nid in expanded_depths if nid in nodes_by_id]
             if not candidate_nodes:
                 return PrimeContextResult(project=project, summary="Expansion produced no candidate nodes.")
 
             # Score with relation-aware ranking (no natural language query)
             expanded_ids_in_scope = [nid for nid in expanded_depths if nid in nodes_by_id]
-            similarity_by_id = {nid: 0.0 for nid in expanded_ids_in_scope}
-            lexical_by_id = {nid: 0.0 for nid in expanded_ids_in_scope}
-            negation_boost_by_id = {nid: 0.0 for nid in expanded_ids_in_scope}
+            similarity_by_id = dict.fromkeys(expanded_ids_in_scope, 0.0)
+            lexical_by_id = dict.fromkeys(expanded_ids_in_scope, 0.0)
+            negation_boost_by_id = dict.fromkeys(expanded_ids_in_scope, 0.0)
             transcript_session_scores = self._recent_transcript_session_scores(
                 agent_id=agent_id,
                 project=project,
@@ -6234,9 +6317,7 @@ class MemoryGraph:
             # Apply support coverage
             selected_nodes = scored_nodes[:max_nodes]
             candidate_pool = {node.id: node for node in candidate_nodes}
-            selected_nodes = self._ensure_support_coverage(
-                selected_nodes, candidate_pool, graph, max_nodes
-            )
+            selected_nodes = self._ensure_support_coverage(selected_nodes, candidate_pool, graph, max_nodes)
 
             selected_ids = [node.id for node in selected_nodes]
             edges = self._fetch_edges_for_nodes(connection, selected_ids)
@@ -6265,8 +6346,9 @@ class MemoryGraph:
                        evidence_records, valid_from, valid_to, created_at, updated_at, access_count, tenant_id
                 FROM nodes
                 WHERE tenant_id = ?
-                """
-            , (self.tenant_id,)).fetchall()
+                """,
+                (self.tenant_id,),
+            ).fetchall()
             if not node_rows:
                 return TopicResult(clusters=[], total_clusters=0)
             nodes = [self._row_to_node(row) for row in node_rows]
@@ -6320,14 +6402,16 @@ class MemoryGraph:
             relationship_counts[rel] = relationship_counts.get(rel, 0) + 1
 
         # Build type breakdown
-        type_breakdown = ", ".join(
-            f"{count} {ttype}" for ttype, count in sorted(type_counts.items())
-        ) if type_counts else "no nodes"
+        type_breakdown = (
+            ", ".join(f"{count} {ttype}" for ttype, count in sorted(type_counts.items())) if type_counts else "no nodes"
+        )
 
         # Build relationship breakdown
-        relationship_breakdown = ", ".join(
-            f"{count} {rel}" for rel, count in sorted(relationship_counts.items())
-        ) if relationship_counts else "no edges"
+        relationship_breakdown = (
+            ", ".join(f"{count} {rel}" for rel, count in sorted(relationship_counts.items()))
+            if relationship_counts
+            else "no edges"
+        )
 
         # Check for contradictions
         has_contradictions = "contradicts" in relationship_counts
@@ -6384,8 +6468,7 @@ class MemoryGraph:
         normalized_label = normalize_text(node.label)
         normalized_content = normalize_text(node.content)
         # Type-aware cosine threshold — decisions merge at 0.82, facts at 0.92, etc.
-        type_threshold = type_aware_dedup_threshold(node.node_type,
-                                                    default=self.dedup_similarity_threshold)
+        type_threshold = type_aware_dedup_threshold(node.node_type, default=self.dedup_similarity_threshold)
         best_match: tuple[Node, float] | None = None
 
         for row in rows:
@@ -6411,8 +6494,8 @@ class MemoryGraph:
             if (
                 node_entity is not None
                 and existing_entity is not None
-                and node_entity[1] == existing_entity[1]   # same category
-                and node_entity[0] != existing_entity[0]   # different entity
+                and node_entity[1] == existing_entity[1]  # same category
+                and node_entity[0] != existing_entity[0]  # different entity
                 and not describes_rejected_or_limited_option(node.content)
                 and not describes_rejected_or_limited_option(existing_node.content)
             ):
@@ -6423,9 +6506,7 @@ class MemoryGraph:
             # Conflicting numbers signal distinct facts, not duplicates.
             # Also applies to non-entity facts that have conflicting numbers.
             if contains_conflicting_numbers(node.content, existing_node.content) and (
-                node_entity is None
-                or existing_entity is None
-                or node_entity[0] == existing_entity[0]
+                node_entity is None or existing_entity is None or node_entity[0] == existing_entity[0]
             ):
                 continue
             if contains_conflicting_months(node.content, existing_node.content):
@@ -6531,15 +6612,19 @@ class MemoryGraph:
         # Track all phrasings that have been merged into this canonical node.
         # The incoming content is a new alias unless it's already the canonical content
         # or already present in the alias list.
-        merged_aliases = list(dict.fromkeys([
-            *existing_node.aliases,
-            *(
-                [incoming_node.content]
-                if incoming_node.content != existing_node.content
-                and incoming_node.content not in existing_node.aliases
-                else []
-            ),
-        ]))
+        merged_aliases = list(
+            dict.fromkeys(
+                [
+                    *existing_node.aliases,
+                    *(
+                        [incoming_node.content]
+                        if incoming_node.content != existing_node.content
+                        and incoming_node.content not in existing_node.aliases
+                        else []
+                    ),
+                ]
+            )
+        )
         updated_at = utc_now()
         connection.execute(
             """
@@ -6844,7 +6929,9 @@ class MemoryGraph:
                         edge.created_at.isoformat(),
                     ),
                 )
-                self._mark_node_superseded(connection, old_node=existing_node, new_node=node, relationship=edge.relationship)
+                self._mark_node_superseded(
+                    connection, old_node=existing_node, new_node=node, relationship=edge.relationship
+                )
             conflicts.append(
                 ConflictRecord(
                     other_node_id=existing_node.id,
@@ -7025,7 +7112,7 @@ class MemoryGraph:
         row_keys = set(row.keys())
         return Node(
             id=row["id"],
-            tenant_id=row["tenant_id"] if "tenant_id" in row.keys() else self.tenant_id,
+            tenant_id=row["tenant_id"] if "tenant_id" in row_keys else self.tenant_id,
             agent_id=row["agent_id"] if "agent_id" in row_keys else "",
             project=row["project"] if "project" in row_keys else "",
             session_id=row["session_id"] if "session_id" in row_keys else "",
@@ -7040,7 +7127,9 @@ class MemoryGraph:
             embedding_dim=int(row["embedding_dim"] or 0) if "embedding_dim" in row_keys else 0,
             source_turn_pair_id=row["source_turn_pair_id"] if "source_turn_pair_id" in row_keys else "",
             metadata=_decode_metadata(row["metadata"]) if "metadata" in row_keys else {},
-            evidence_records=_decode_evidence_records(row["evidence_records"]) if "evidence_records" in row_keys else [],
+            evidence_records=_decode_evidence_records(row["evidence_records"])
+            if "evidence_records" in row_keys
+            else [],
             valid_from=_parse_datetime(row["valid_from"]) if "valid_from" in row_keys and row["valid_from"] else None,
             valid_to=_parse_datetime(row["valid_to"]) if "valid_to" in row_keys and row["valid_to"] else None,
             created_at=_parse_datetime(row["created_at"]),
@@ -7049,9 +7138,10 @@ class MemoryGraph:
         )
 
     def _row_to_context_window(self, row: sqlite3.Row) -> ContextWindow:
+        row_keys = set(row.keys())
         return ContextWindow(
             id=row["id"],
-            tenant_id=row["tenant_id"] if "tenant_id" in row.keys() else self.tenant_id,
+            tenant_id=row["tenant_id"] if "tenant_id" in row_keys else self.tenant_id,
             repo_id=row["repo_id"],
             session_id=row["session_id"],
             title=row["title"] or "",
@@ -7064,9 +7154,10 @@ class MemoryGraph:
         )
 
     def _row_to_context_window_edge(self, row: sqlite3.Row) -> ContextWindowEdge:
+        row_keys = set(row.keys())
         return ContextWindowEdge(
             id=row["id"],
-            tenant_id=row["tenant_id"] if "tenant_id" in row.keys() else self.tenant_id,
+            tenant_id=row["tenant_id"] if "tenant_id" in row_keys else self.tenant_id,
             source_window_id=row["source_window_id"],
             target_window_id=row["target_window_id"],
             edge_type=row["edge_type"],
@@ -7077,9 +7168,10 @@ class MemoryGraph:
         )
 
     def _row_to_edge(self, row: sqlite3.Row) -> Edge:
+        row_keys = set(row.keys())
         return Edge(
             id=row["id"],
-            tenant_id=row["tenant_id"] if "tenant_id" in row.keys() else self.tenant_id,
+            tenant_id=row["tenant_id"] if "tenant_id" in row_keys else self.tenant_id,
             source_id=row["source_id"],
             target_id=row["target_id"],
             relationship=row["relationship"],
@@ -7089,21 +7181,22 @@ class MemoryGraph:
         )
 
     def _row_to_transcript_record(self, row: sqlite3.Row) -> TranscriptRecord:
+        row_keys = set(row.keys())
         return TranscriptRecord(
             id=row["id"],
-            tenant_id=row["tenant_id"] if "tenant_id" in row.keys() else self.tenant_id,
-            agent_id=row["agent_id"] if "agent_id" in row.keys() else "",
-            project=row["project"] if "project" in row.keys() else "",
-            session_id=row["session_id"] if "session_id" in row.keys() else "",
+            tenant_id=row["tenant_id"] if "tenant_id" in row_keys else self.tenant_id,
+            agent_id=row["agent_id"] if "agent_id" in row_keys else "",
+            project=row["project"] if "project" in row_keys else "",
+            session_id=row["session_id"] if "session_id" in row_keys else "",
             observed_at=_parse_datetime(row["observed_at"]),
             turn_index=int(row["turn_index"] or 0),
             role=row["role"] or "",
             transcript_text=row["transcript_text"],
-            embedding_model_id=row["embedding_model_id"] if "embedding_model_id" in row.keys() else "",
-            embedding_dim=int(row["embedding_dim"] or 0) if "embedding_dim" in row.keys() else 0,
-            content_hash=row["content_hash"] if "content_hash" in row.keys() else "",
-            turn_pair_id=row["turn_pair_id"] if "turn_pair_id" in row.keys() else "",
-            metadata=_decode_metadata(row["metadata"]) if "metadata" in row.keys() else {},
+            embedding_model_id=row["embedding_model_id"] if "embedding_model_id" in row_keys else "",
+            embedding_dim=int(row["embedding_dim"] or 0) if "embedding_dim" in row_keys else 0,
+            content_hash=row["content_hash"] if "content_hash" in row_keys else "",
+            turn_pair_id=row["turn_pair_id"] if "turn_pair_id" in row_keys else "",
+            metadata=_decode_metadata(row["metadata"]) if "metadata" in row_keys else {},
         )
 
     def _transcript_scope_matches(
@@ -7121,9 +7214,7 @@ class MemoryGraph:
             return False
         if normalized_project and record.project.strip().lower() != normalized_project:
             return False
-        if normalized_session and record.session_id.strip().lower() != normalized_session:
-            return False
-        return True
+        return not (normalized_session and record.session_id.strip().lower() != normalized_session)
 
     def list_transcript_records(
         self,
@@ -7502,7 +7593,7 @@ class MemoryGraph:
         if raw in (None, ""):
             return None
         if isinstance(raw, datetime):
-            return raw if raw.tzinfo is not None else raw.replace(tzinfo=timezone.utc)
+            return raw if raw.tzinfo is not None else raw.replace(tzinfo=UTC)
         try:
             return _parse_datetime(str(raw))
         except ValueError:
@@ -7625,19 +7716,23 @@ class MemoryGraph:
             degree_component = degree_by_id.get(node.id, 0) / max_degree if max_degree > 0 else 0.0
             depth_component = 1.0 / (1.0 + expanded_depths.get(node.id, max_depth + 1))
             edge_weight = max(base_edge_weight, (0.6 * degree_component) + (0.4 * depth_component))
-            base = score_node(
-                similarity,
-                node.updated_at.timestamp(),
-                edge_weight=edge_weight,
-                now=now,
-                half_life_days=self.recency_half_life_days,
-                superseded=self._node_is_superseded(node),
-            ) + temporal_score_adjustment(node, temporal_hints) + negation_boost_by_id.get(node.id, 0.0)
-            
+            base = (
+                score_node(
+                    similarity,
+                    node.updated_at.timestamp(),
+                    edge_weight=edge_weight,
+                    now=now,
+                    half_life_days=self.recency_half_life_days,
+                    superseded=self._node_is_superseded(node),
+                )
+                + temporal_score_adjustment(node, temporal_hints)
+                + negation_boost_by_id.get(node.id, 0.0)
+            )
+
             if expansion_metadata is not None and node.id in expansion_metadata:
                 meta = expansion_metadata[node.id]
                 base += RELATION_SCORE_BOOST.get(meta.via_relation, 0.0)
-            
+
             self._apply_node_score(node, similarity=similarity, edge_weight=edge_weight, now=now)
             node.final_score = base
             return base
@@ -7754,7 +7849,9 @@ class MemoryGraph:
         normalized = re.sub(r"\s+", " ", query.strip())
         parts = [
             part.strip(" ?,.;:")
-            for part in re.split(r"\b(?:and|plus|with|or|because|justified by|supported by|due to)\b", normalized, flags=re.IGNORECASE)
+            for part in re.split(
+                r"\b(?:and|plus|with|or|because|justified by|supported by|due to)\b", normalized, flags=re.IGNORECASE
+            )
             if len(part.strip(" ?,.;:")) >= 4
         ]
         if len(parts) < 2:
@@ -7763,11 +7860,7 @@ class MemoryGraph:
 
     def _expand_query_aliases(self, query: str) -> str:
         normalized = query.lower()
-        aliases = [
-            alias
-            for trigger, alias in QUERY_ALIAS_TERMS
-            if trigger in normalized
-        ]
+        aliases = [alias for trigger, alias in QUERY_ALIAS_TERMS if trigger in normalized]
         if not aliases:
             return query
         return " ".join([query, *aliases])
@@ -7776,10 +7869,7 @@ class MemoryGraph:
         return self._expand_query_aliases(f"{intent} {full_query}".strip())
 
     def _lexical_score_for_node(self, query: str, node: Node) -> float:
-        tag_text = " ".join(
-            tag.replace(":", " ").replace("_", " ").replace("-", " ")
-            for tag in node.tags
-        )
+        tag_text = " ".join(tag.replace(":", " ").replace("_", " ").replace("-", " ") for tag in node.tags)
         content_score = lexical_overlap(query, node.label, node.content)
         if not tag_text:
             return content_score
@@ -7914,7 +8004,7 @@ class MemoryGraph:
             _counter += 1
 
         while heap:
-            neg_pri, _, node_id, depth, via_relation, from_node, effective_priority = heapq.heappop(heap)
+            _neg_pri, _, node_id, depth, via_relation, from_node, effective_priority = heapq.heappop(heap)
 
             if node_id in seen:
                 continue
@@ -7945,11 +8035,7 @@ class MemoryGraph:
                 relationship = data.get("relationship", "relates_to")
                 weight = float(data.get("weight", 1.0))
 
-                effective = (
-                    self._relation_priority(relationship)
-                    * weight
-                    * (decay ** depth)
-                )
+                effective = self._relation_priority(relationship) * weight * (decay**depth)
 
                 if effective < min_priority:
                     continue
@@ -8037,8 +8123,6 @@ class MemoryGraph:
                 for member in members:
                     partition[str(member)] = cluster_id
             return partition
-
-    
 
     def _fetch_edges_for_nodes(
         self,
@@ -8142,8 +8226,9 @@ class MemoryGraph:
             FROM nodes
             WHERE tenant_id = ?
             ORDER BY updated_at DESC
-            """
-        , (self.tenant_id,)).fetchall()
+            """,
+            (self.tenant_id,),
+        ).fetchall()
         scored: list[tuple[str, float, str]] = []
         for row in rows:
             node = self._row_to_node(row)
@@ -8151,7 +8236,9 @@ class MemoryGraph:
                 continue
 
             tags = json.loads(row["tags"] or "[]")
-            tag_match = 1.0 if any(project_lower in {str(tag).lower(), f"project:{str(tag).lower()}"} for tag in tags) else 0.0
+            tag_match = (
+                1.0 if any(project_lower in {str(tag).lower(), f"project:{str(tag).lower()}"} for tag in tags) else 0.0
+            )
             explicit_match = 1.0 if str(row["project"] or "").strip().lower() == project_lower else 0.0
             lexical = lexical_overlap(project, row["label"], row["content"])
             score = max(explicit_match, tag_match, lexical)
@@ -8182,7 +8269,9 @@ class MemoryGraph:
             (transcript_id, self.tenant_id),
         ).fetchone()
 
-    def _build_backup_snapshot(self, connection: sqlite3.Connection, *, include_embeddings: bool = False) -> dict[str, Any]:
+    def _build_backup_snapshot(
+        self, connection: sqlite3.Connection, *, include_embeddings: bool = False
+    ) -> dict[str, Any]:
         node_rows = connection.execute(
             """
             SELECT id, tenant_id, agent_id, project, session_id, context_window_id, label, content, node_type, tags, source_prompt,
@@ -8191,16 +8280,18 @@ class MemoryGraph:
             FROM nodes
             WHERE tenant_id = ?
             ORDER BY created_at ASC
-            """
-        , (self.tenant_id,)).fetchall()
+            """,
+            (self.tenant_id,),
+        ).fetchall()
         edge_rows = connection.execute(
             """
             SELECT id, tenant_id, source_id, target_id, relationship, weight, metadata, created_at
             FROM edges
             WHERE tenant_id = ?
             ORDER BY created_at ASC
-            """
-        , (self.tenant_id,)).fetchall()
+            """,
+            (self.tenant_id,),
+        ).fetchall()
         repo_rows = connection.execute(
             """
             SELECT id, tenant_id, name, description, created_at, updated_at
@@ -8302,7 +8393,9 @@ class MemoryGraph:
                     "embedding_dim": int(row["embedding_dim"] or 0),
                     "source_turn_pair_id": row["source_turn_pair_id"] or "",
                     "metadata": _decode_metadata(row["metadata"]),
-                    "evidence_records": [record.model_dump(mode="json") for record in _decode_evidence_records(row["evidence_records"])],
+                    "evidence_records": [
+                        record.model_dump(mode="json") for record in _decode_evidence_records(row["evidence_records"])
+                    ],
                     "valid_from": row["valid_from"],
                     "valid_to": row["valid_to"],
                     "created_at": row["created_at"],
@@ -8347,7 +8440,9 @@ class MemoryGraph:
             ],
         }
         if include_embeddings:
-            snapshot["embedding_dim"] = next((int(row["embedding_dim"] or 0) for row in node_rows if int(row["embedding_dim"] or 0)), 0)
+            snapshot["embedding_dim"] = next(
+                (int(row["embedding_dim"] or 0) for row in node_rows if int(row["embedding_dim"] or 0)), 0
+            )
         return snapshot
 
     def _insert_snapshot_node(self, connection: sqlite3.Connection, raw_node: dict[str, Any]) -> None:
@@ -8382,7 +8477,9 @@ class MemoryGraph:
                 embedding_dim,
                 raw_node.get("source_prompt", ""),
                 raw_node.get("source_turn_pair_id", ""),
-                _encode_evidence_records([EvidenceRecord.model_validate(item) for item in raw_node.get("evidence_records", [])]),
+                _encode_evidence_records(
+                    [EvidenceRecord.model_validate(item) for item in raw_node.get("evidence_records", [])]
+                ),
                 raw_node.get("valid_from"),
                 raw_node.get("valid_to"),
                 raw_node["created_at"],
@@ -8396,7 +8493,9 @@ class MemoryGraph:
         embedding_model_id = str(raw_transcript.get("embedding_model_id", "") or "")
         embedding_dim = int(raw_transcript.get("embedding_dim", 0) or 0)
         if embedding is None:
-            embedding_vector, embedding_model_id, embedding_dim = self._embed_with_metadata(raw_transcript["transcript_text"])
+            embedding_vector, embedding_model_id, embedding_dim = self._embed_with_metadata(
+                raw_transcript["transcript_text"]
+            )
             embedding = self.embedding_model.to_bytes(embedding_vector)
         connection.execute(
             """
@@ -8431,7 +8530,9 @@ class MemoryGraph:
         embedding_model_id = str(raw_transcript.get("embedding_model_id", "") or "")
         embedding_dim = int(raw_transcript.get("embedding_dim", 0) or 0)
         if embedding is None:
-            embedding_vector, embedding_model_id, embedding_dim = self._embed_with_metadata(raw_transcript["transcript_text"])
+            embedding_vector, embedding_model_id, embedding_dim = self._embed_with_metadata(
+                raw_transcript["transcript_text"]
+            )
             embedding = self.embedding_model.to_bytes(embedding_vector)
         connection.execute(
             """
@@ -8579,7 +8680,9 @@ class MemoryGraph:
                 embedding_dim,
                 raw_node.get("source_prompt", ""),
                 raw_node.get("source_turn_pair_id", ""),
-                _encode_evidence_records([EvidenceRecord.model_validate(item) for item in raw_node.get("evidence_records", [])]),
+                _encode_evidence_records(
+                    [EvidenceRecord.model_validate(item) for item in raw_node.get("evidence_records", [])]
+                ),
                 raw_node.get("valid_from"),
                 raw_node.get("valid_to"),
                 raw_node["created_at"],

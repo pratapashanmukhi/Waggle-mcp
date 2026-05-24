@@ -7,10 +7,10 @@ Covers:
 - --include-low-confidence-edges override
 - edge_quality_report MCP tool
 """
+
 from __future__ import annotations
 
 import json
-import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -20,12 +20,10 @@ from waggle.abhi import build_abhi_document, write_abhi_document
 from waggle.graph import MemoryGraph
 from waggle.intelligence import (
     RELATES_TO_COSINE_THRESHOLD,
-    RELATES_TO_MIN_SHARED_TOKENS,
     TYPED_EDGE_CONFIDENCE,
     infer_relationship,
 )
 from waggle.models import Node, NodeType, RelationType
-
 
 # ---------------------------------------------------------------------------
 # Shared test helpers
@@ -78,7 +76,6 @@ def _make_node(content: str, node_type: NodeType = NodeType.FACT) -> Node:
 
 def _edge_confidence(graph: MemoryGraph, source_id: str, target_id: str) -> float | None:
     """Fetch edge_confidence from metadata for a specific edge pair."""
-    import sqlite3
 
     with graph._lock, graph._connect() as conn:
         row = conn.execute(
@@ -265,76 +262,85 @@ def _make_snapshot_with_edges(
 ) -> dict:
     """Build a minimal snapshot dict with synthetic edges for export tests."""
     import uuid
+
     from waggle.models import utc_now
 
     now = utc_now().isoformat()
     nodes = []
     for i in range(max(high_confidence_count, low_confidence_count) * 2 + 2):
-        nodes.append({
-            "id": str(uuid.uuid4()),
-            "tenant_id": "local-default",
-            "agent_id": "",
-            "project": "",
-            "session_id": "",
-            "context_window_id": None,
-            "label": f"Node {i}",
-            "content": f"Content for node {i}",
-            "node_type": "fact",
-            "tags": [],
-            "source_prompt": "",
-            "embedding_model_id": "",
-            "embedding_dim": 0,
-            "source_turn_pair_id": "",
-            "metadata": {},
-            "evidence_records": [],
-            "valid_from": None,
-            "valid_to": None,
-            "created_at": now,
-            "updated_at": now,
-            "access_count": 0,
-            "embedding": None,
-        })
+        nodes.append(
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": "local-default",
+                "agent_id": "",
+                "project": "",
+                "session_id": "",
+                "context_window_id": None,
+                "label": f"Node {i}",
+                "content": f"Content for node {i}",
+                "node_type": "fact",
+                "tags": [],
+                "source_prompt": "",
+                "embedding_model_id": "",
+                "embedding_dim": 0,
+                "source_turn_pair_id": "",
+                "metadata": {},
+                "evidence_records": [],
+                "valid_from": None,
+                "valid_to": None,
+                "created_at": now,
+                "updated_at": now,
+                "access_count": 0,
+                "embedding": None,
+            }
+        )
 
     node_ids = [n["id"] for n in nodes]
     edges = []
 
     # High-confidence RELATES_TO edges (confidence = 0.8)
     for i in range(high_confidence_count):
-        edges.append({
-            "id": str(uuid.uuid4()),
-            "tenant_id": "local-default",
-            "source_id": node_ids[i * 2],
-            "target_id": node_ids[i * 2 + 1],
-            "relationship": "relates_to",
-            "weight": 1.0,
-            "metadata": {"edge_confidence": 0.8},
-            "created_at": now,
-        })
+        edges.append(
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": "local-default",
+                "source_id": node_ids[i * 2],
+                "target_id": node_ids[i * 2 + 1],
+                "relationship": "relates_to",
+                "weight": 1.0,
+                "metadata": {"edge_confidence": 0.8},
+                "created_at": now,
+            }
+        )
 
     # Low-confidence RELATES_TO edges (confidence = 0.5)
     for i in range(low_confidence_count):
-        edges.append({
-            "id": str(uuid.uuid4()),
-            "tenant_id": "local-default",
-            "source_id": node_ids[i * 2],
-            "target_id": node_ids[i * 2 + 1],
-            "relationship": "relates_to",
-            "weight": 1.0,
-            "metadata": {"edge_confidence": 0.5},
-            "created_at": now,
-        })
+        edges.append(
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": "local-default",
+                "source_id": node_ids[i * 2],
+                "target_id": node_ids[i * 2 + 1],
+                "relationship": "relates_to",
+                "weight": 1.0,
+                "metadata": {"edge_confidence": 0.5},
+                "created_at": now,
+            }
+        )
 
     # A typed DEPENDS_ON edge (no confidence field — treated as 1.0)
-    edges.append({
-        "id": str(uuid.uuid4()),
-        "tenant_id": "local-default",
-        "source_id": node_ids[0],
-        "target_id": node_ids[1],
-        "relationship": "depends_on",
-        "weight": 1.0,
-        "metadata": {"edge_confidence": 0.9},
-        "created_at": now,
-    })
+    edges.append(
+        {
+            "id": str(uuid.uuid4()),
+            "tenant_id": "local-default",
+            "source_id": node_ids[0],
+            "target_id": node_ids[1],
+            "relationship": "depends_on",
+            "weight": 1.0,
+            "metadata": {"edge_confidence": 0.9},
+            "created_at": now,
+        }
+    )
 
     return {
         "schema_version": 1,
@@ -354,12 +360,10 @@ class TestAbhiExportEdgeFiltering:
         """Default export excludes RELATES_TO edges with confidence < 0.7."""
         snapshot = _make_snapshot_with_edges(high_confidence_count=2, low_confidence_count=3)
         doc = build_abhi_document(snapshot)
-        exported_rels = [e["relationship"] for e in doc["edges"]]
+        [e["relationship"] for e in doc["edges"]]
         # All 3 low-confidence RELATES_TO should be gone; 2 high-confidence + 1 depends_on remain
         relates_to_edges = [e for e in doc["edges"] if e["relationship"] == "relates_to"]
-        assert len(relates_to_edges) == 2, (
-            f"Expected 2 high-confidence RELATES_TO, got {len(relates_to_edges)}"
-        )
+        assert len(relates_to_edges) == 2, f"Expected 2 high-confidence RELATES_TO, got {len(relates_to_edges)}"
         # depends_on must always be present
         assert any(e["relationship"] == "depends_on" for e in doc["edges"])
 
@@ -402,36 +406,69 @@ class TestAbhiExportEdgeFiltering:
     def test_non_relates_to_edges_never_filtered(self) -> None:
         """DEPENDS_ON, UPDATES, CONTRADICTS edges are never filtered regardless of confidence."""
         import uuid
+
         from waggle.models import utc_now
 
         now = utc_now().isoformat()
         node_ids = [str(uuid.uuid4()) for _ in range(4)]
         nodes = [
             {
-                "id": nid, "tenant_id": "local-default", "agent_id": "", "project": "",
-                "session_id": "", "context_window_id": None, "label": f"N{i}",
-                "content": f"content {i}", "node_type": "fact", "tags": [],
-                "source_prompt": "", "embedding_model_id": "", "embedding_dim": 0,
-                "source_turn_pair_id": "", "metadata": {}, "evidence_records": [],
-                "valid_from": None, "valid_to": None, "created_at": now,
-                "updated_at": now, "access_count": 0, "embedding": None,
+                "id": nid,
+                "tenant_id": "local-default",
+                "agent_id": "",
+                "project": "",
+                "session_id": "",
+                "context_window_id": None,
+                "label": f"N{i}",
+                "content": f"content {i}",
+                "node_type": "fact",
+                "tags": [],
+                "source_prompt": "",
+                "embedding_model_id": "",
+                "embedding_dim": 0,
+                "source_turn_pair_id": "",
+                "metadata": {},
+                "evidence_records": [],
+                "valid_from": None,
+                "valid_to": None,
+                "created_at": now,
+                "updated_at": now,
+                "access_count": 0,
+                "embedding": None,
             }
             for i, nid in enumerate(node_ids)
         ]
         edges = [
-            {"id": str(uuid.uuid4()), "tenant_id": "local-default",
-             "source_id": node_ids[0], "target_id": node_ids[1],
-             "relationship": "depends_on", "weight": 1.0,
-             "metadata": {"edge_confidence": 0.1}, "created_at": now},
-            {"id": str(uuid.uuid4()), "tenant_id": "local-default",
-             "source_id": node_ids[2], "target_id": node_ids[3],
-             "relationship": "updates", "weight": 1.0,
-             "metadata": {"edge_confidence": 0.2}, "created_at": now},
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": "local-default",
+                "source_id": node_ids[0],
+                "target_id": node_ids[1],
+                "relationship": "depends_on",
+                "weight": 1.0,
+                "metadata": {"edge_confidence": 0.1},
+                "created_at": now,
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": "local-default",
+                "source_id": node_ids[2],
+                "target_id": node_ids[3],
+                "relationship": "updates",
+                "weight": 1.0,
+                "metadata": {"edge_confidence": 0.2},
+                "created_at": now,
+            },
         ]
         snapshot = {
-            "schema_version": 1, "tenant_id": "local-default",
-            "embedding_model_id": "", "nodes": nodes, "edges": edges,
-            "transcripts": [], "context_windows": [], "repos": [],
+            "schema_version": 1,
+            "tenant_id": "local-default",
+            "embedding_model_id": "",
+            "nodes": nodes,
+            "edges": edges,
+            "transcripts": [],
+            "context_windows": [],
+            "repos": [],
             "context_window_edges": [],
         }
         doc = build_abhi_document(snapshot, include_low_confidence_edges=False)
@@ -458,11 +495,15 @@ class TestEdgeQualityReport:
         b = graph.add_node(label="B", content="service B", node_type=NodeType.FACT).node
         c = graph.add_node(label="C", content="service C", node_type=NodeType.FACT).node
         graph.add_edge(
-            source_id=a.id, target_id=b.id, relationship=RelationType.DEPENDS_ON,
+            source_id=a.id,
+            target_id=b.id,
+            relationship=RelationType.DEPENDS_ON,
             metadata={"edge_confidence": 0.9},
         )
         graph.add_edge(
-            source_id=b.id, target_id=c.id, relationship=RelationType.RELATES_TO,
+            source_id=b.id,
+            target_id=c.id,
+            relationship=RelationType.RELATES_TO,
             metadata={"edge_confidence": 0.6},
         )
         report = graph.edge_quality_report()
@@ -478,11 +519,15 @@ class TestEdgeQualityReport:
         b = graph.add_node(label="B", content="node B content", node_type=NodeType.FACT).node
         c = graph.add_node(label="C", content="node C content", node_type=NodeType.FACT).node
         graph.add_edge(
-            source_id=a.id, target_id=b.id, relationship=RelationType.RELATES_TO,
+            source_id=a.id,
+            target_id=b.id,
+            relationship=RelationType.RELATES_TO,
             metadata={"edge_confidence": 0.6},
         )
         graph.add_edge(
-            source_id=b.id, target_id=c.id, relationship=RelationType.RELATES_TO,
+            source_id=b.id,
+            target_id=c.id,
+            relationship=RelationType.RELATES_TO,
             metadata={"edge_confidence": 0.8},
         )
         report = graph.edge_quality_report()
@@ -492,8 +537,7 @@ class TestEdgeQualityReport:
     def test_report_top10_highest_and_lowest(self, tmp_path: Path) -> None:
         graph = make_graph(tmp_path)
         nodes = [
-            graph.add_node(label=f"N{i}", content=f"node {i} content", node_type=NodeType.FACT).node
-            for i in range(6)
+            graph.add_node(label=f"N{i}", content=f"node {i} content", node_type=NodeType.FACT).node for i in range(6)
         ]
         confidences = [0.55, 0.60, 0.65, 0.70, 0.75, 0.80]
         for i in range(5):
@@ -519,7 +563,9 @@ class TestEdgeQualityReport:
         b = graph.add_node(label="B", content="node B", node_type=NodeType.FACT).node
         # Add edge with no edge_confidence in metadata
         graph.add_edge(
-            source_id=a.id, target_id=b.id, relationship=RelationType.RELATES_TO,
+            source_id=a.id,
+            target_id=b.id,
+            relationship=RelationType.RELATES_TO,
             metadata={},
         )
         report = graph.edge_quality_report()

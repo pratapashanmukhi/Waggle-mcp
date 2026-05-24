@@ -8,9 +8,9 @@ import numpy as np
 import pytest
 
 import waggle
+from waggle.config import AppConfig
 from waggle.graph import MemoryGraph
 from waggle.models import NodeType, RelationType
-from waggle.config import AppConfig
 from waggle.server import (
     AUTOMATIC_MEMORY_RULE_TEXT,
     WaggleServer,
@@ -22,9 +22,9 @@ from waggle.server import (
     _run_graph_editor_command,
     _run_setup,
     _setup_clients_from_args,
-    _write_codex_agents,
-    _write_codex,
     _write_antigravity,
+    _write_codex,
+    _write_codex_agents,
     _write_gemini,
     _write_other,
 )
@@ -120,20 +120,52 @@ def test_tool_schemas_are_glama_friendly(tmp_path: Path) -> None:
 def test_parser_accepts_graph_editor_commands() -> None:
     parser = _build_parser()
 
-    create_api_key_args = parser.parse_args(["create-api-key", "--tenant-id", "workspace-a", "--name", "prod-agent", "--expires-in-days", "30", "--created-by", "ops@example.com", "--scopes", "graph:read,admin:read"])
-    list_audit_args = parser.parse_args(["list-audit-events", "--tenant-id", "workspace-a", "--type", "api_key.created", "--limit", "25"])
+    create_api_key_args = parser.parse_args(
+        [
+            "create-api-key",
+            "--tenant-id",
+            "workspace-a",
+            "--name",
+            "prod-agent",
+            "--expires-in-days",
+            "30",
+            "--created-by",
+            "ops@example.com",
+            "--scopes",
+            "graph:read,admin:read",
+        ]
+    )
+    list_audit_args = parser.parse_args(
+        ["list-audit-events", "--tenant-id", "workspace-a", "--type", "api_key.created", "--limit", "25"]
+    )
     retention_status_args = parser.parse_args(["retention-status", "--tenant-id", "workspace-a"])
-    set_retention_args = parser.parse_args(["set-retention", "--tenant-id", "workspace-a", "--enabled", "--days", "90", "--interval-hours", "12"])
+    set_retention_args = parser.parse_args(
+        ["set-retention", "--tenant-id", "workspace-a", "--enabled", "--days", "90", "--interval-hours", "12"]
+    )
     prune_retention_args = parser.parse_args(["prune-retention", "--tenant-id", "workspace-a", "--batch-size", "250"])
     edit_args = parser.parse_args(["edit-graph", "--port", "8787", "--no-open"])
     view_args = parser.parse_args(["view-graph"])
     diff_args = parser.parse_args(["diff", "--file-a", "a.abhi", "--file-b", "b.abhi"])
     merge_args = parser.parse_args(
-        ["merge", "--base", "base.abhi", "--left", "left.abhi", "--right", "right.abhi", "--output", "merged.abhi", "--merge-strategy", "last_write_wins"]
+        [
+            "merge",
+            "--base",
+            "base.abhi",
+            "--left",
+            "left.abhi",
+            "--right",
+            "right.abhi",
+            "--output",
+            "merged.abhi",
+            "--merge-strategy",
+            "last_write_wins",
+        ]
     )
     query_args = parser.parse_args(["query", "--input", "memory.abhi", "--query-id", "q1"])
     load_chunks_args = parser.parse_args(["load-chunks", "--input", "memory.abhi", "--chunk-id", "decision_1"])
-    checkpoint_args = parser.parse_args(["checkpoint-context", "--project", "MCP", "--session-id", "thread-1", "--output", "handoff.abhi"])
+    checkpoint_args = parser.parse_args(
+        ["checkpoint-context", "--project", "MCP", "--session-id", "thread-1", "--output", "handoff.abhi"]
+    )
     clear_session_args = parser.parse_args(["clear-session", "--session-id", "thread-1", "--yes"])
     clear_project_args = parser.parse_args(["clear-project", "--project", "MCP", "--yes"])
     clear_all_args = parser.parse_args(["clear-all", "--yes"])
@@ -288,7 +320,6 @@ def test_doctor_fix_reembeds_mixed_embedding_model_ids(tmp_path: Path, capsys: p
     assert repaired["transcript_stale_rows"] == 0
 
 
-
 def test_create_and_list_api_keys_cli_redacts_hash(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     app = make_app(tmp_path)
 
@@ -326,7 +357,7 @@ def test_retention_admin_commands_update_and_prune(tmp_path: Path, capsys: pytes
     tenant_graph = app.graph.for_tenant("workspace-a")
     old_time = "2026-01-01T00:00:00+00:00"
     tenant_graph.add_node(label="Old fact", content="prune me", node_type=NodeType.FACT)
-    with tenant_graph._lock, tenant_graph._connect() as connection:  # noqa: SLF001 - test helper
+    with tenant_graph._lock, tenant_graph._connect() as connection:
         connection.execute("UPDATE nodes SET created_at = ?, updated_at = ?", (old_time, old_time))
 
     set_args = SimpleNamespace(
@@ -397,7 +428,10 @@ def test_audit_events_are_queryable_from_admin_cli(tmp_path: Path, capsys: pytes
     assert events[0]["resource_id"] == create_payload["api_key_id"]
     assert events[0]["metadata"]["prefix"] == create_payload["prefix"]
 
-def test_run_graph_editor_command_opens_browser_and_starts_uvicorn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+
+def test_run_graph_editor_command_opens_browser_and_starts_uvicorn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = AppConfig(
         backend="sqlite",
         transport="stdio",
@@ -908,8 +942,6 @@ def test_git_vocabulary_pull_aliases(tmp_path: Path) -> None:
     assert pull_result.isError is False
     assert pull_result.structuredContent["pull_format"] == "abhi"
 
-
-
     app = make_app(tmp_path)
     observed = app.handle_tool_call(
         "observe_conversation",
@@ -918,10 +950,7 @@ def test_git_vocabulary_pull_aliases(tmp_path: Path) -> None:
             "assistant_response": "I'll remember that decision.",
         },
     )
-    decision = next(
-        node for node in observed.structuredContent["stored_nodes"]
-        if node["label"] == "Database decision"
-    )
+    decision = next(node for node in observed.structuredContent["stored_nodes"] if node["label"] == "Database decision")
 
     result = app.handle_tool_call("get_node_history", {"node_id": decision["id"], "max_depth": 1})
 
@@ -1180,7 +1209,9 @@ def test_markdown_vault_tool_and_cli_command(tmp_path: Path, capsys: pytest.Capt
     assert tool_result.isError is False
     assert tool_result.structuredContent["files_written"]
 
-    args = SimpleNamespace(command="export-markdown-vault", root_path=str(tmp_path / "vault-cli"), project="", agent_id="", session_id="")
+    args = SimpleNamespace(
+        command="export-markdown-vault", root_path=str(tmp_path / "vault-cli"), project="", agent_id="", session_id=""
+    )
     exit_code = _run_admin_command(app.config, args)
     payload = json.loads(capsys.readouterr().out)
 
@@ -1469,7 +1500,7 @@ def test_write_codex_config_no_longer_uses_pythonpath(monkeypatch: pytest.Monkey
     assert "PYTHONPATH" not in contents
     assert 'command = "waggle-mcp"' in contents
     assert 'args = ["serve", "--transport", "stdio"]' in contents
-    assert '[mcp_servers.waggle.env]' in contents
+    assert "[mcp_servers.waggle.env]" in contents
 
 
 def test_parser_exposes_non_interactive_setup_command() -> None:
@@ -1531,24 +1562,26 @@ def test_run_setup_writes_codex_config_and_agents(monkeypatch: pytest.MonkeyPatc
 
     assert result == 0
     config_text = (tmp_path / ".codex" / "config.toml").read_text()
-    assert '[mcp_servers.waggle]' in config_text
+    assert "[mcp_servers.waggle]" in config_text
     assert 'WAGGLE_MODEL = "deterministic"' in config_text
     assert AUTOMATIC_MEMORY_RULE_TEXT.strip() in (tmp_path / "AGENTS.md").read_text()
 
 
-def test_write_codex_config_updates_existing_file_without_duplicates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_write_codex_config_updates_existing_file_without_duplicates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     config_file = tmp_path / ".codex" / "config.toml"
     config_file.parent.mkdir(parents=True)
     config_file.write_text(
-        '[profile.default]\n'
+        "[profile.default]\n"
         'model = "gpt-5.4"\n\n'
-        '[mcp_servers.waggle]\n'
+        "[mcp_servers.waggle]\n"
         'command = "/old/python"\n'
         'args = ["-m", "waggle.server"]\n\n'
-        '[mcp_servers.waggle.env]\n'
+        "[mcp_servers.waggle.env]\n"
         'WAGGLE_DB_PATH = "/old/memory.db"\n\n'
-        '[mcp_servers.playwright]\n'
+        "[mcp_servers.playwright]\n"
         'command = "npx"\n'
     )
 

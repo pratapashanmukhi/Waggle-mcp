@@ -9,12 +9,12 @@ Tests cover:
   16.5  CLI exit codes and --format=patch error
   16.6  serialize_abhi_diff truncation and MergeStrategyConfig.load()
 """
+
 from __future__ import annotations
 
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
@@ -37,15 +37,15 @@ from waggle.errors import (
     SchemaVersionError,
 )
 from waggle.models import (
-    EdgeDiffRecord,
     FieldDelta,
     FieldLevelDiffResult,
-    MergeConflictRecord,
     MergeStrategyConfig,
     NodeDiffRecord,
 )
+
 try:
     from waggle.server import app as cli_app
+
     _CLI_AVAILABLE = True
 except ImportError:
     cli_app = None  # type: ignore[assignment]
@@ -82,6 +82,7 @@ def _make_snapshot(nodes=None, edges=None):
 
 def _node(label="Test", content="Test content", node_type="fact", **kwargs):
     from uuid import uuid4
+
     return {
         "id": str(uuid4()),
         "label": label,
@@ -96,6 +97,7 @@ def _node(label="Test", content="Test content", node_type="fact", **kwargs):
 
 def _edge(source_id, target_id, relationship="relates_to", **kwargs):
     from uuid import uuid4
+
     return {
         "id": str(uuid4()),
         "source_id": source_id,
@@ -199,6 +201,7 @@ def test_schema_version_mismatch_minor():
         doc_b["manifest"]["schema_version"] = "2.1.0"
 
         from waggle.abhi import diff_abhi_documents
+
         result = diff_abhi_documents(
             doc_a,
             doc_b,
@@ -225,6 +228,7 @@ def test_schema_version_mismatch_major():
         doc_b["manifest"]["schema_version"] = "2.0.0"
 
         from waggle.abhi import diff_abhi_documents
+
         with pytest.raises(SchemaVersionError) as exc_info:
             diff_abhi_documents(
                 doc_a,
@@ -253,6 +257,7 @@ def test_import_dangling_edges_allow_dangling():
     snapshot = abhi_to_snapshot(doc, fallback_tenant_id="test", allow_dangling=True)
     # The dangling edge should have been dropped
     from waggle.abhi import _find_dangling_edges, build_abhi_document
+
     rebuilt_doc = build_abhi_document(snapshot)
     assert _find_dangling_edges(rebuilt_doc) == []
 
@@ -268,6 +273,7 @@ def test_import_dangling_edges_force():
 def test_export_strict_export_rejected():
     """build_abhi_document with strict_export=True and dangling edge — DanglingEdgeError."""
     from uuid import uuid4
+
     n1 = _node("N1", "Node 1")
     missing_id = str(uuid4())
     e_dangling = _edge(n1["id"], missing_id, "relates_to")
@@ -280,6 +286,7 @@ def test_export_strict_export_rejected():
 def test_export_strict_export_allowed():
     """build_abhi_document without strict_export=True and dangling edge — no error."""
     from uuid import uuid4
+
     n1 = _node("N1", "Node 1")
     missing_id = str(uuid4())
     e_dangling = _edge(n1["id"], missing_id, "relates_to")
@@ -313,6 +320,7 @@ def test_resolve_unknown_conflict_id():
 def test_upgrade_already_at_version(caplog):
     """upgrade_abhi_document with target_version matching current — no file modification."""
     import logging
+
     with tempfile.TemporaryDirectory() as tmpdir:
         snap = _make_snapshot(nodes=[_node("N1", "Content")])
         path = Path(tmpdir) / "doc.abhi"
@@ -323,7 +331,7 @@ def test_upgrade_already_at_version(caplog):
         mtime_before = path.stat().st_mtime
 
         with caplog.at_level(logging.INFO, logger="waggle.abhi"):
-            result = upgrade_abhi_document(
+            upgrade_abhi_document(
                 doc,
                 input_path=path,
                 target_version=current_version,
@@ -334,8 +342,10 @@ def test_upgrade_already_at_version(caplog):
         mtime_after = path.stat().st_mtime
         assert mtime_before == mtime_after
         # Info message should have been logged
-        assert any("already at" in record.message.lower() or "no upgrade" in record.message.lower()
-                   for record in caplog.records)
+        assert any(
+            "already at" in record.message.lower() or "no upgrade" in record.message.lower()
+            for record in caplog.records
+        )
 
 
 def test_upgrade_unsupported_path():
@@ -375,9 +385,11 @@ def test_cli_diff_format_patch_error():
 
         result = runner.invoke(cli_app, ["diff", "a.abhi", "b.abhi", "--format", "patch"])
         assert result.exit_code == 1
-        assert "patch" in (result.output + (result.stderr if hasattr(result, "stderr") else "")).lower() or \
-               "not yet supported" in (result.output + "").lower() or \
-               "patch" in str(result.exception or "").lower()
+        assert (
+            "patch" in (result.output + (result.stderr if hasattr(result, "stderr") else "")).lower()
+            or "not yet supported" in (result.output + "").lower()
+            or "patch" in str(result.exception or "").lower()
+        )
 
 
 @_skip_cli
@@ -403,6 +415,7 @@ def test_cli_merge_conflicts_exit_1():
     runner = CliRunner()
     with runner.isolated_filesystem():
         from uuid import uuid4
+
         node_id = str(uuid4())
 
         base_node = {
@@ -428,10 +441,15 @@ def test_cli_merge_conflicts_exit_1():
         result = runner.invoke(
             cli_app,
             [
-                "merge", "left.abhi", "right.abhi",
-                "--base", "base.abhi",
-                "--output", "out.abhi",
-                "--strategy", "contradict",
+                "merge",
+                "left.abhi",
+                "right.abhi",
+                "--base",
+                "base.abhi",
+                "--output",
+                "out.abhi",
+                "--strategy",
+                "contradict",
             ],
         )
         assert result.exit_code == 1

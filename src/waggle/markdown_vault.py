@@ -96,9 +96,7 @@ def render_node_document(node: Node, edges: list[Edge], node_by_id: dict[str, No
             continue
         target = node_by_id.get(edge.target_id)
         target_label = target.label if target is not None else edge.target_id
-        relation_lines.append(
-            f"- [[{edge.relationship}::{target_label}]] <!-- node_id:{edge.target_id} -->"
-        )
+        relation_lines.append(f"- [[{edge.relationship}::{target_label}]] <!-- node_id:{edge.target_id} -->")
     evidence_lines = [
         f"- [{record.source_role or 'unknown'} turn {record.turn_index}] {record.source_text}"
         for record in node.evidence_records[:5]

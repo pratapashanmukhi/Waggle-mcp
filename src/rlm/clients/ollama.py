@@ -47,9 +47,7 @@ class OllamaClient(BaseLM):
         self._track_usage(payload, model)
         return str(payload.get("message", {}).get("content", "") or "")
 
-    async def acompletion(
-        self, prompt: str | list[dict[str, Any]], model: str | None = None
-    ) -> str:
+    async def acompletion(self, prompt: str | list[dict[str, Any]], model: str | None = None) -> str:
         return self.completion(prompt, model=model)
 
     def _to_messages(self, prompt: str | list[dict[str, Any]]) -> list[dict[str, str]]:

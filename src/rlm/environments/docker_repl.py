@@ -72,9 +72,7 @@ class LLMProxyHandler(BaseHTTPRequestHandler):
             return {"error": "No LM handler configured"}
 
         prompts = body.get("prompts", [])
-        responses = send_lm_request_batched(
-            self.lm_handler_address, prompts, model=body.get("model"), depth=self.depth
-        )
+        responses = send_lm_request_batched(self.lm_handler_address, prompts, model=body.get("model"), depth=self.depth)
 
         results = []
         for resp in responses:
@@ -203,9 +201,7 @@ class DockerREPL(NonIsolatedEnv):
         **kwargs,
     ):
         if persistent:
-            raise NotImplementedError(
-                "Persistent REPLs are currently not supported for environment: DockerREPL"
-            )
+            raise NotImplementedError("Persistent REPLs are currently not supported for environment: DockerREPL")
         super().__init__(persistent=persistent, depth=depth, **kwargs)
 
         self.image = image
@@ -214,9 +210,7 @@ class DockerREPL(NonIsolatedEnv):
         self.proxy_server: HTTPServer | None = None
         self.proxy_thread: threading.Thread | None = None
         self.proxy_port: int = 0
-        base_dir = os.environ.get(
-            "RLM_DOCKER_WORKSPACE_DIR", os.path.join(os.getcwd(), ".rlm_workspace")
-        )
+        base_dir = os.environ.get("RLM_DOCKER_WORKSPACE_DIR", os.path.join(os.getcwd(), ".rlm_workspace"))
         os.makedirs(base_dir, exist_ok=True)
         self.temp_dir = tempfile.mkdtemp(prefix="docker_repl_", dir=base_dir)
         self.pending_calls: list[RLMChatCompletion] = []
@@ -283,9 +277,7 @@ class DockerREPL(NonIsolatedEnv):
             context_path = os.path.join(self.temp_dir, "context.txt")
             with open(context_path, "w") as f:
                 f.write(context_payload)
-            self.execute_code(
-                "with open('/workspace/context.txt', 'r') as f:\n    context = f.read()"
-            )
+            self.execute_code("with open('/workspace/context.txt', 'r') as f:\n    context = f.read()")
         else:
             context_path = os.path.join(self.temp_dir, "context.json")
             with open(context_path, "w") as f:

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import numpy as np
 from pathlib import Path
 
-import pytest
+import numpy as np
 
 from waggle.graph import MemoryGraph
 from waggle.models import CanonicalizeResult, DedupCandidatesResult, NodeType
@@ -13,6 +12,7 @@ from waggle.models import CanonicalizeResult, DedupCandidatesResult, NodeType
 
 class FakeEmbeddingModel:
     """Deterministic embedding model for tests."""
+
     model_name = "fake-model"
     model_id = "fake-model:deterministic-v1"
 
@@ -252,12 +252,12 @@ class TestCanonicalizeNode:
         # Merged nodes should be deleted
         try:
             graph.get_node(node2.node.id)
-            assert False, "node2 should have been deleted"
+            raise AssertionError("node2 should have been deleted")
         except ValueError:
             pass
         try:
             graph.get_node(node3.node.id)
-            assert False, "node3 should have been deleted"
+            raise AssertionError("node3 should have been deleted")
         except ValueError:
             pass
 
@@ -324,12 +324,12 @@ class TestCanonicalizeNode:
         )
 
         # Create edges pointing to node2
-        edge1 = graph.add_edge(
+        graph.add_edge(
             source_id=node1.node.id,
             target_id=node2.node.id,
             relationship="relates_to",
         )
-        edge2 = graph.add_edge(
+        graph.add_edge(
             source_id=node3.node.id,
             target_id=node2.node.id,
             relationship="relates_to",
@@ -369,7 +369,7 @@ class TestDedupCandidates:
             content="alpha beta gamma delta zeta",
             node_type=NodeType.FACT,
         )
-        node3 = graph.add_node(
+        graph.add_node(
             label="Preference C",
             content="one two three four five six seven",
             node_type=NodeType.FACT,
@@ -382,8 +382,8 @@ class TestDedupCandidates:
         assert result.total_nodes_scanned == 3
 
         pair_found = any(
-            (p.node_id_a == node1.node.id and p.node_id_b == node2.node.id) or
-            (p.node_id_a == node2.node.id and p.node_id_b == node1.node.id)
+            (p.node_id_a == node1.node.id and p.node_id_b == node2.node.id)
+            or (p.node_id_a == node2.node.id and p.node_id_b == node1.node.id)
             for p in result.pairs
         )
         assert pair_found, f"Expected node1/node2 pair, got: {result.pairs}"
@@ -399,13 +399,13 @@ class TestDedupCandidates:
         )
 
         # Create nodes in different projects
-        node1 = graph.add_node(
+        graph.add_node(
             label="Database",
             content="We use PostgreSQL for production",
             node_type=NodeType.ENTITY,
             project="project_a",
         )
-        node2 = graph.add_node(
+        graph.add_node(
             label="Database",
             content="We use MySQL for staging",
             node_type=NodeType.ENTITY,

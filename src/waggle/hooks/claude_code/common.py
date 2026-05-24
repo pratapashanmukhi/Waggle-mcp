@@ -31,7 +31,9 @@ def infer_project_scope(payload: dict[str, Any]) -> str:
 
 
 def checkpoint_stem(*, config: AppConfig, project: str, session_id: str) -> Path:
-    export_root = Path(config.export_dir).expanduser() if config.export_dir else Path(config.db_path).expanduser().parent
+    export_root = (
+        Path(config.export_dir).expanduser() if config.export_dir else Path(config.db_path).expanduser().parent
+    )
     checkpoint_root = export_root / "checkpoints"
     scope_parts = [project.strip() or "default-project", session_id.strip() or "default-session"]
     safe_parts = [_sanitize_path_component(part) for part in scope_parts]
@@ -55,7 +57,9 @@ def checkpoint_path(
 
 
 def checkpoint_manifest_path(*, config: AppConfig) -> Path:
-    export_root = Path(config.export_dir).expanduser() if config.export_dir else Path(config.db_path).expanduser().parent
+    export_root = (
+        Path(config.export_dir).expanduser() if config.export_dir else Path(config.db_path).expanduser().parent
+    )
     manifest_dir = export_root / "checkpoints"
     manifest_dir.mkdir(parents=True, exist_ok=True)
     return manifest_dir / "manifest.json"
@@ -125,5 +129,6 @@ def _detect_repo_root(path: Path) -> Path | None:
 def _stable_project_id(path: Path) -> str:
     name = _sanitize_path_component(path.name or "workspace") or "workspace"
     import hashlib
+
     suffix = hashlib.sha1(path.as_posix().encode("utf-8")).hexdigest()[:8]
     return f"{name}@{suffix}"

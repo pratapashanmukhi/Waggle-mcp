@@ -38,11 +38,11 @@ class EmbeddingModel:
 
     Lifecycle states
     ----------------
-    not_started  – warmup has not been requested yet (default after construction)
-    warming_up   – background thread is loading the model
-    ready        – model loaded successfully; semantic calls are cheap
-    failed       – background thread raised an exception; deterministic fallback active
-    disabled     – startup_mode == "fast"; ML never loads
+    not_started  - warmup has not been requested yet (default after construction)
+    warming_up   - background thread is loading the model
+    ready        - model loaded successfully; semantic calls are cheap
+    failed       - background thread raised an exception; deterministic fallback active
+    disabled     - startup_mode == "fast"; ML never loads
     """
 
     _DETERMINISTIC_MODELS = {"fake", "fake-model", "deterministic", "offline-demo"}
@@ -82,7 +82,7 @@ class EmbeddingModel:
         LOGGER.info("embedding_warmup_started", extra={"model": self.model_name})
 
     def disable_warmup(self) -> None:
-        """Called in fast/inspection mode – mark as disabled so callers can surface it."""
+        """Called in fast/inspection mode - mark as disabled so callers can surface it."""
         with self._lock:
             if self._warmup_started:
                 return
@@ -244,7 +244,7 @@ class EmbeddingModel:
                 self._handle_warmup_failure(exc)
                 return None
 
-        # Warmup was requested – wait for it.
+        # Warmup was requested - wait for it.
         if not self._ready_event.wait(timeout=wait_timeout):
             LOGGER.warning(
                 "embedding_warmup_timeout",
@@ -290,8 +290,8 @@ class EmbeddingModel:
         try:
             return SentenceTransformer(self.model_name, local_files_only=True)
         except Exception:
-            # Model not cached locally — must download from HuggingFace.
-            # This can take 30–120 s and requires a network connection.
+            # Model not cached locally - must download from HuggingFace.
+            # This can take 30-120 s and requires a network connection.
             # Tip: set WAGGLE_MODEL=deterministic for offline-safe mode.
             LOGGER.warning(
                 "embedding_model_downloading",
@@ -301,7 +301,7 @@ class EmbeddingModel:
                         "Model not in local cache. Downloading ~420 MB from HuggingFace. "
                         "This will block the current call. "
                         "To avoid: set WAGGLE_MODEL=deterministic for offline-safe mode, "
-                        "or pre-download: python -c \"from sentence_transformers import SentenceTransformer; "
+                        'or pre-download: python -c "from sentence_transformers import SentenceTransformer; '
                         f"SentenceTransformer('{self.model_name}')\""
                     ),
                 },

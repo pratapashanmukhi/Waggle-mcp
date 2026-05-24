@@ -210,14 +210,10 @@ def build_query_summary(
     node_by_id = {node.id: node for node in nodes}
     parts: list[str] = []
 
-    fact_like_nodes = [
-        node for node in nodes if node.node_type.value in {"fact", "preference", "concept", "entity"}
-    ]
+    fact_like_nodes = [node for node in nodes if node.node_type.value in {"fact", "preference", "concept", "entity"}]
     if fact_like_nodes:
         parts.append(
-            "Key context: "
-            + "; ".join(_shorten_summary_text(node.content) for node in fact_like_nodes[:2])
-            + "."
+            "Key context: " + "; ".join(_shorten_summary_text(node.content) for node in fact_like_nodes[:2]) + "."
         )
 
     decision_nodes = [node for node in nodes if node.node_type.value == "decision"]
@@ -227,9 +223,7 @@ def build_query_summary(
             support_labels = _support_labels_for_node(node, edges, node_by_id)
             primary_text = _shorten_summary_text(node.content, max_chars=120)
             if support_labels:
-                decision_summaries.append(
-                    f"{primary_text} Supported by {', '.join(support_labels[:2])}"
-                )
+                decision_summaries.append(f"{primary_text} Supported by {', '.join(support_labels[:2])}")
             else:
                 decision_summaries.append(primary_text)
         parts.append("Decisions: " + "; ".join(decision_summaries) + ".")
@@ -316,9 +310,7 @@ def _relationship_lines(bundle: ContextBundle) -> list[str]:
     for edge in bundle.edges:
         source_label = node_by_id.get(edge.source_id).label if edge.source_id in node_by_id else edge.source_id[:8]
         target_label = node_by_id.get(edge.target_id).label if edge.target_id in node_by_id else edge.target_id[:8]
-        lines.append(
-            f'- "{source_label}" --[{edge.relationship}, weight={edge.weight:.2f}]--> "{target_label}"'
-        )
+        lines.append(f'- "{source_label}" --[{edge.relationship}, weight={edge.weight:.2f}]--> "{target_label}"')
     return lines
 
 
@@ -452,7 +444,7 @@ def render_context_bundle_markdown(
     if bundle.timeline:
         for item in bundle.timeline:
             timestamp = f" `{item.timestamp.isoformat()}`" if include_timestamps else ""
-            lines.append(f'- [{item.kind}]{timestamp} {item.label} — {item.summary}')
+            lines.append(f"- [{item.kind}]{timestamp} {item.label} — {item.summary}")
     else:
         lines.append("- No recent changes available.")
 
@@ -463,15 +455,15 @@ def render_context_bundle_markdown(
         for hit in bundle.replay_hits[:10]:
             timestamp = f" `{hit.observed_at.isoformat()}`" if include_timestamps else ""
             lines.append(
-                f'- [session `{hit.session_id or "n/a"}` turn {hit.turn_index} role `{hit.role or "unknown"}`]{timestamp} '
-                f'{hit.transcript_snippet or hit.transcript_text}'
+                f"- [session `{hit.session_id or 'n/a'}` turn {hit.turn_index} role `{hit.role or 'unknown'}`]{timestamp} "
+                f"{hit.transcript_snippet or hit.transcript_text}"
             )
     else:
         lines.append("- No replay evidence included in this bundle.")
     lines.extend(["", "## Full Node Appendix", ""])
 
     for chunk_index, start in enumerate(range(0, len(bundle.nodes), APPENDIX_CHUNK_SIZE), start=1):
-        chunk = bundle.nodes[start:start + APPENDIX_CHUNK_SIZE]
+        chunk = bundle.nodes[start : start + APPENDIX_CHUNK_SIZE]
         if bundle.render_hints.chunk_count > 1:
             lines.extend([f"### Appendix Chunk {chunk_index}/{bundle.render_hints.chunk_count}", ""])
         for node in chunk:
@@ -536,10 +528,9 @@ def render_context_bundle_json(
             )
             for node in bundle.nodes
         ],
-        "edges": [
-            _edge_to_export_dict(edge, include_timestamps=include_timestamps)
-            for edge in bundle.edges
-        ] if include_edges else [],
+        "edges": [_edge_to_export_dict(edge, include_timestamps=include_timestamps) for edge in bundle.edges]
+        if include_edges
+        else [],
         "replay_hits": [
             {
                 "score": hit.score,

@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-import sys
-from types import ModuleType
 
 import numpy as np
 import pytest
@@ -14,8 +12,7 @@ from starlette.testclient import TestClient
 import waggle
 from waggle.auth import hash_api_key, verify_api_key
 from waggle.config import AppConfig
-from waggle.errors import AuthenticationError
-from waggle.errors import RateLimitExceededError
+from waggle.errors import AuthenticationError, RateLimitExceededError
 from waggle.graph import MemoryGraph
 from waggle.models import NodeType
 from waggle.rate_limit import RateLimiter
@@ -76,14 +73,16 @@ def make_http_config(tmp_path: Path, **overrides: object) -> AppConfig:
     return config
 
 
-def insert_transcript_record(graph: MemoryGraph, *, project: str, session_id: str, role: str, turn_index: int, text: str) -> None:
-    with graph._lock, graph._connect() as connection:  # noqa: SLF001 - test helper
-        graph._store_transcript_record(  # noqa: SLF001 - test helper
+def insert_transcript_record(
+    graph: MemoryGraph, *, project: str, session_id: str, role: str, turn_index: int, text: str
+) -> None:
+    with graph._lock, graph._connect() as connection:
+        graph._store_transcript_record(
             connection,
             agent_id="codex",
             project=project,
             session_id=session_id,
-            observed_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+            observed_at=datetime(2026, 5, 1, tzinfo=UTC),
             turn_index=turn_index,
             role=role,
             transcript_text=text,
@@ -117,7 +116,7 @@ def test_expired_api_key_is_rejected(tmp_path: Path) -> None:
     created = graph.create_api_key(
         "tenant-http",
         "expired-test",
-        expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+        expires_at=datetime.now(UTC) - timedelta(days=1),
     )
 
     with pytest.raises(AuthenticationError, match="expired"):
@@ -128,8 +127,8 @@ def test_retention_policy_and_prune_delete_old_records(tmp_path: Path) -> None:
     graph = make_graph(tmp_path)
     graph.ensure_tenant("tenant-http", "Tenant HTTP")
     tenant_graph = graph.for_tenant("tenant-http")
-    old_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    new_time = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    old_time = datetime(2026, 1, 1, tzinfo=UTC)
+    new_time = datetime(2026, 5, 1, tzinfo=UTC)
 
     old_node = tenant_graph.add_node(
         label="Old decision",
@@ -142,7 +141,7 @@ def test_retention_policy_and_prune_delete_old_records(tmp_path: Path) -> None:
         node_type=NodeType.DECISION,
     )
 
-    with tenant_graph._lock, tenant_graph._connect() as connection:  # noqa: SLF001 - test helper
+    with tenant_graph._lock, tenant_graph._connect() as connection:
         connection.execute(
             "UPDATE nodes SET created_at = ?, updated_at = ? WHERE id = ?",
             (old_time.isoformat(), old_time.isoformat(), old_node.node.id),
@@ -151,7 +150,7 @@ def test_retention_policy_and_prune_delete_old_records(tmp_path: Path) -> None:
             "UPDATE nodes SET created_at = ?, updated_at = ? WHERE id = ?",
             (new_time.isoformat(), new_time.isoformat(), fresh_node.node.id),
         )
-        tenant_graph._store_transcript_record(  # noqa: SLF001 - test helper
+        tenant_graph._store_transcript_record(
             connection,
             agent_id="codex",
             project="MCP",
@@ -163,7 +162,7 @@ def test_retention_policy_and_prune_delete_old_records(tmp_path: Path) -> None:
             metadata={},
             message_identity="old:0:user",
         )
-        tenant_graph._store_transcript_record(  # noqa: SLF001 - test helper
+        tenant_graph._store_transcript_record(
             connection,
             agent_id="codex",
             project="MCP",
@@ -181,13 +180,13 @@ def test_retention_policy_and_prune_delete_old_records(tmp_path: Path) -> None:
     assert policy.retention_days == 30
     assert policy.prune_interval_hours == 12
 
-    run = tenant_graph.prune_retention(now=datetime(2026, 5, 6, tzinfo=timezone.utc))
+    run = tenant_graph.prune_retention(now=datetime(2026, 5, 6, tzinfo=UTC))
 
     assert run.status == "completed"
     assert run.deleted_nodes == 1
     assert run.deleted_transcripts == 1
 
-    with tenant_graph._lock, tenant_graph._connect() as connection:  # noqa: SLF001 - test helper
+    with tenant_graph._lock, tenant_graph._connect() as connection:
         rows = connection.execute("SELECT label FROM nodes ORDER BY label ASC").fetchall()
     assert {row["label"] for row in rows} == {"Fresh decision"}
 
@@ -232,8 +231,11 @@ def test_app_config_disables_hybrid_rerank_by_default(monkeypatch: pytest.Monkey
 
 
 def test_waggle_unknown_lazy_export_raises_attribute_error() -> None:
+    def access_missing_export() -> object:
+        return waggle.definitely_missing_export
+
     with pytest.raises(AttributeError):
-        getattr(waggle, "definitely_missing_export")
+        access_missing_export()
     assert hasattr(waggle, "definitely_missing_export") is False
 
 
@@ -416,7 +418,7 @@ def test_http_graph_editor_routes_and_crud(tmp_path: Path) -> None:
         editor = client.get("/graph")
         assert editor.status_code == 200
         assert "Waggle Graph Studio" in editor.text
-        assert 'window.__WAGGLE_GRAPH_CONFIG__' in editor.text
+        assert "window.__WAGGLE_GRAPH_CONFIG__" in editor.text
         viewer = client.get("/graph?mode=view")
         assert viewer.status_code == 200
         assert '"mode": "view"' in viewer.text
@@ -550,7 +552,7 @@ def test_http_graph_editor_routes_and_crud(tmp_path: Path) -> None:
         exported_abhi = client.get("/api/graph/export", params={"format": "abhi", "project": "studio"})
         assert exported_abhi.status_code == 200
         assert exported_abhi.content.startswith(b"WGL\x01")
-        assert "attachment; filename=\"waggle-memory.abhi\"" == exported_abhi.headers["content-disposition"]
+        assert exported_abhi.headers["content-disposition"] == 'attachment; filename="waggle-memory.abhi"'
         exported_abhi_b64 = base64.b64encode(exported_abhi.content).decode("ascii")
 
         import_preview = client.post(
@@ -613,7 +615,8 @@ def test_http_admin_retention_and_audit_endpoints(tmp_path: Path) -> None:
         assert runs.status_code == 200
         assert runs.json()
 
-        audit = client.get("/api/admin/audit-events", params={"tenant_id": "workspace-a", "type": "retention.policy.updated"})
+        audit = client.get(
+            "/api/admin/audit-events", params={"tenant_id": "workspace-a", "type": "retention.policy.updated"}
+        )
         assert audit.status_code == 200
         assert audit.json()[0]["event_type"] == "retention.policy.updated"
-

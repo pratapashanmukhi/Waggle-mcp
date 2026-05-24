@@ -281,9 +281,7 @@ class E2BREPL(IsolatedEnv):
         **kwargs: Any,
     ):
         if persistent:
-            raise NotImplementedError(
-                "Persistent REPLs are currently not supported for environment: E2BREPL"
-            )
+            raise NotImplementedError("Persistent REPLs are currently not supported for environment: E2BREPL")
         super().__init__(persistent=persistent, **kwargs)
 
         self.timeout = timeout

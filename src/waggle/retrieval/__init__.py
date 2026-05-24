@@ -1,3 +1,3 @@
-from waggle.retrieval.hybrid import HybridRetriever, HybridRetrievalConfig
+from waggle.retrieval.hybrid import HybridRetrievalConfig, HybridRetriever
 
-__all__ = ["HybridRetriever", "HybridRetrievalConfig"]
+__all__ = ["HybridRetrievalConfig", "HybridRetriever"]

@@ -51,11 +51,7 @@ def find_final_answer(text: str, environment: "BaseEnv | None" = None) -> str | 
             if final_answer == "":
                 return None
             # Don't treat FINAL_VAR "variable not found" as final answer (so RLM continues)
-            if (
-                "Variable '" in final_answer
-                and "' not found" in final_answer
-                and "FINAL_VAR" in final_answer
-            ):
+            if "Variable '" in final_answer and "' not found" in final_answer and "FINAL_VAR" in final_answer:
                 return None
             return final_answer
         return None
@@ -70,9 +66,7 @@ def find_final_answer(text: str, environment: "BaseEnv | None" = None) -> str | 
     return None
 
 
-def format_iteration(
-    iteration: RLMIteration, max_character_length: int = 20000
-) -> list[dict[str, str]]:
+def format_iteration(iteration: RLMIteration, max_character_length: int = 20000) -> list[dict[str, str]]:
     """
     Format an RLM iteration (including all code blocks) to append to the message history for
     the prompt of the LM in the next iteration. We also truncate code execution results
@@ -92,10 +86,7 @@ def format_iteration(
         result = code_block.result
         result = format_execution_result(result)
         if len(result) > max_character_length:
-            result = (
-                result[:max_character_length]
-                + f"... + [{len(result) - max_character_length} chars...]"
-            )
+            result = result[:max_character_length] + f"... + [{len(result) - max_character_length} chars...]"
 
         execution_message = {
             "role": "user",
