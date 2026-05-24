@@ -3,8 +3,8 @@
   "name": "waggle-memory",
   "display_name": "Waggle: Local Memory for AI Agents",
   "version": "0.0.1",
-  "description": "Local graph memory for coding agents using MCP.",
-  "long_description": "Waggle gives coding agents persistent repo memory without requiring a cloud account or API key. This package is currently a manifest-first MCPB skeleton while bundled binary distribution is being finalized.",
+  "description": "Local graph memory for coding agents using MCP. Persistent repo decisions, constraints, corrections, contradictions, and session context across chats.",
+  "long_description": "Waggle gives coding agents persistent repo memory without requiring a cloud account or API key. It stores decisions, reasons, constraints, corrections, contradictions, and transcript-backed context locally, then exposes that memory through MCP tools for priming, retrieval, observation, export, and inspection workflows.",
   "author": {
     "name": "Abhigyan Shekhar"
   },
@@ -43,6 +43,8 @@
       }
     }
   },
+  "tools_generated": true,
+  "prompts_generated": true,
   "user_config": {
     "db_path": {
       "type": "string",
@@ -64,6 +66,18 @@
       "description": "Embedding model identifier for local retrieval.",
       "required": true,
       "default": "all-MiniLM-L6-v2"
+    },
+    "export_dir": {
+      "type": "directory",
+      "title": "Export Directory",
+      "description": "Optional local directory for exports and backups.",
+      "default": "~/.waggle/exports"
+    },
+    "startup_mode": {
+      "type": "string",
+      "title": "Startup Mode",
+      "description": "Optional startup mode for local launch behavior: fast, normal, or strict.",
+      "default": "normal"
     }
   }
 }
