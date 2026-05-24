@@ -33,6 +33,10 @@ graph-ui/dist/
 graph-ui/screenshots-*.png
 graph-ui/shot-*.png
 graph-ui/sample-preview.html
+packages/*/node_modules/
+packages/*/dist/
+packages/**/*.vsix
+packages/**/*.mcpb
 tests/artifacts/
 sample.abhi
 CODEX.md
@@ -42,3 +46,9 @@ benchmarks/output/
 benchmarks/longmemeval/.cache/
 *.egg-info/
 benchmarks/longmemeval/longmemeval_s_cleaned.json
+.playwright-mcp/
+.kiro/
+antigravity-waggle-export.json
+antigravity-waggle-export.md
+PAPER_SUMMARY.md
+waggle_complete_paper.tex
