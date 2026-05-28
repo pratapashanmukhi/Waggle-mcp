@@ -48,9 +48,8 @@ function Pill({ active, children, color, onClick }) {
   return (
     <button
       onClick={onClick}
-      className={`rounded-full border px-3 py-1 text-xs transition ${
-        active ? "border-white/20 bg-white/12 text-white" : "border-white/10 bg-black/15 text-graph-muted hover:bg-white/8"
-      }`}
+      className={`rounded-full border px-3 py-1 text-xs transition ${active ? "border-white/20 bg-white/12 text-white" : "border-white/10 bg-black/15 text-graph-muted hover:bg-white/8"
+        }`}
       style={active && color ? { boxShadow: `0 0 0 1px ${color} inset`, color } : undefined}
       type="button"
     >
@@ -566,6 +565,24 @@ export function App() {
     setToast("Node deleted.");
   };
 
+  const deleteEdge = async (edgeId) => {
+  if (boot.sampleMode || readOnly) {
+    return;
+  }
+
+  await pushHistory();
+
+  await apiRequest(`/api/graph/edges/${edgeId}`, {
+    method: "DELETE"
+  });
+
+  await loadSnapshot(scope);
+
+  setSelectedEdgeId("");
+
+  setToast("Edge deleted.");
+};
+
   const mergeNode = async (sourceId) => {
     if (!selectedNodeId || selectedNodeId === sourceId || boot.sampleMode) {
       setToast("Select a destination graph node first.");
@@ -660,7 +677,7 @@ export function App() {
   };
 
   const exportGraph = async (format) => {
-    if (boot.sampleMode) {
+    if (boot.sampleMode || readOnly) {
       setToast("Sample mode only. Export is disabled.");
       return;
     }
@@ -795,20 +812,20 @@ export function App() {
   const visibleTranscriptRecords = transcriptSearch.trim()
     ? transcriptHits
     : transcriptRecords.filter((record) => {
-        const activeSessions = new Set(filters.sessions || []);
-        const activeAgents = new Set(filters.agents || []);
-        const activeProjects = new Set(filters.projects || []);
-        if (activeSessions.size && !activeSessions.has(record.session_id || "")) {
-          return false;
-        }
-        if (activeAgents.size && !activeAgents.has(record.agent_id || "")) {
-          return false;
-        }
-        if (activeProjects.size && !activeProjects.has(record.project || "")) {
-          return false;
-        }
-        return true;
-      });
+      const activeSessions = new Set(filters.sessions || []);
+      const activeAgents = new Set(filters.agents || []);
+      const activeProjects = new Set(filters.projects || []);
+      if (activeSessions.size && !activeSessions.has(record.session_id || "")) {
+        return false;
+      }
+      if (activeAgents.size && !activeAgents.has(record.agent_id || "")) {
+        return false;
+      }
+      if (activeProjects.size && !activeProjects.has(record.project || "")) {
+        return false;
+      }
+      return true;
+    });
 
   const selectedGraphNode = graph.nodes.find((node) => node.id === selectedNodeId) || null;
   const selectedPair = transcriptPairs.find((pair) => pair.id === selectedNodeId) || null;
@@ -1199,6 +1216,18 @@ export function App() {
                 </div>
                 <button className="rounded-xl bg-white px-3 py-2 text-sm font-medium text-black" disabled={readOnly || boot.sampleMode} onClick={() => setEdgeDialog(selectedEdge)} type="button">
                   Edit edge label
+                </button>
+                <button
+                  className="rounded-xl border border-red-400/30 px-3 py-2 text-sm text-red-200"
+                  disabled={readOnly || boot.sampleMode}
+                  onClick={() =>
+                    deleteEdge(selectedEdge.id).catch((error) =>
+                      setToast(error.message)
+                    )
+                  }
+                  type="button"
+                >
+                  Delete edge
                 </button>
               </div>
             ) : (
