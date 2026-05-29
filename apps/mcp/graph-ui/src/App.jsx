@@ -820,7 +820,7 @@ export function App() {
     : transcriptRecords.filter((record) => {
         const activeSessions = new Set(filters.sessions || []);
         const activeAgents = new Set(filters.agents || []);
-        const activeProjects = new Set(filters.projects || []);      
+        const activeProjects = new Set(filters.projects || []);
         if (activeSessions.size && !activeSessions.has(record.session_id || "")) {
           return false;
         }
