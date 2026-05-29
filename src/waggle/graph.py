@@ -801,7 +801,6 @@ class ScoredNodeView:
 
     node_id: str
     updated_at_ts: float  # pre-converted .timestamp() — avoids per-compare call
-    access_count: int
     final_score: float = 0.0
     label_lower: str = ""  # pre-lowercased for tiebreak sort
 
@@ -6609,9 +6608,11 @@ class MemoryGraph:
         best_match: tuple[Node, float] | None = None
 
         # Pre-normalise the query embedding ONCE so the inner loop only needs a
-        # single np.dot() per candidate instead of two norm computations.
+        # single np.dot() per candidate instead of two norm computations. Use a
+        # fresh local so we don't shadow the `embedding` parameter — keeps the
+        # invariant "normalisation happens here, not silently for callers" clear.
         _emb_norm = float(np.linalg.norm(embedding))
-        embedding = embedding / _emb_norm if _emb_norm > 0.0 else embedding
+        query_unit = embedding / _emb_norm if _emb_norm > 0.0 else embedding
 
         for row in rows:
             existing_node = self._row_to_node(row)
@@ -6664,9 +6665,8 @@ class MemoryGraph:
 
             # ── Layer 3: semantic similarity (expensive — compute embedding once) ─
             existing_embedding = self.embedding_model.from_bytes(row["embedding"])
-            # Use fast dot() — caller pre-normalises `embedding` before the loop
-            # so np.dot(normed_a, normed_b) == cosine_similarity(a, b).
-            similarity = float(np.dot(embedding, existing_embedding / (np.linalg.norm(existing_embedding) or 1.0)))
+            # Fast dot() — both vectors are unit-norm here, so this equals cosine.
+            similarity = float(np.dot(query_unit, existing_embedding / (np.linalg.norm(existing_embedding) or 1.0)))
             label_score = label_similarity(node.label, existing_node.label)
             acronym_match = is_acronym_match(node.label, existing_node.label)
 
@@ -7928,28 +7928,25 @@ class MemoryGraph:
                     node.label.lower(),
                 ),
             )
-        # Build lightweight ScoredNodeView keys once per node, then sort by those.
-        # This avoids calling .timestamp() and .lower() inside the comparator on
-        # every pair comparison (Python's sort is Timsort — O(N log N) comparisons).
-        scored_views = [
-            ScoredNodeView(
-                node_id=node.id,
-                updated_at_ts=node.updated_at.timestamp(),
-                access_count=node.access_count,
-                final_score=combined_score(node),
-                label_lower=node.label.lower(),
+        # Pair each Node with a lightweight ScoredNodeView built once. Sorting on
+        # the pre-computed slot fields avoids calling .timestamp() and .lower()
+        # inside the comparator on every pair comparison (Timsort is O(N log N)).
+        # Pairing keeps the Node→view association 1:1 so we don't need a dict
+        # round-trip or duplicate-id safety nets in the result construction.
+        view_node_pairs: list[tuple[ScoredNodeView, Node]] = [
+            (
+                ScoredNodeView(
+                    node_id=node.id,
+                    updated_at_ts=node.updated_at.timestamp(),
+                    final_score=combined_score(node),
+                    label_lower=node.label.lower(),
+                ),
+                node,
             )
             for node in candidate_nodes
         ]
-        scored_views.sort(key=lambda v: (-v.final_score, -v.updated_at_ts, v.label_lower))
-        # O(n) reorder — scored_views is already sorted, just map back to Nodes.
-        # Avoids a redundant O(n log n) sorted() call on the original list.
-        nodes_by_id = {node.id: node for node in candidate_nodes}
-        reordered = [nodes_by_id[v.node_id] for v in scored_views if v.node_id in nodes_by_id]
-        # Preserve any candidates missing from scored_views (edge case safety)
-        scored_ids = {v.node_id for v in scored_views}
-        reordered += [n for n in candidate_nodes if n.id not in scored_ids]
-        return reordered
+        view_node_pairs.sort(key=lambda pair: (-pair[0].final_score, -pair[0].updated_at_ts, pair[0].label_lower))
+        return [node for _, node in view_node_pairs]
 
     def _add_clause_seed_ids(
         self,
