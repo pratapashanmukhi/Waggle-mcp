@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import threading
+from collections import OrderedDict
 from typing import Any
 
 import numpy as np
@@ -58,6 +59,13 @@ class EmbeddingModel:
         self._warmup_started = False
         self._warmup_status: str = STATUS_NOT_STARTED
         self._warmup_error: str = ""
+
+        # --- embedding LRU cache ---
+        # Keyed by normalised text; value is a pre-computed bytes blob so we
+        # can return a fresh np.frombuffer view on each hit without re-encoding.
+        # 512 entries x 384 dims x 4 bytes ~= 750 KB -- negligible overhead.
+        self._embed_cache: OrderedDict[str, bytes] = OrderedDict()
+        self._embed_cache_maxsize: int = 512
 
     # ------------------------------------------------------------------
     # Public API: background warmup
@@ -153,24 +161,55 @@ class EmbeddingModel:
         If the background warmup is still in progress, block up to *wait_timeout*
         seconds.  After that, or if warmup failed, fall back to deterministic
         embeddings instead of raising an exception.
+
+        Results are cached (LRU, 512 entries) so repeated queries within a
+        session avoid a second model forward pass.
         """
         normalized = text.strip()
         if not normalized:
             raise ValueError("Cannot embed empty text.")
-        if self.uses_deterministic_mode:
-            return self._embed_deterministically(normalized)
 
-        model = self._resolve_model(wait_timeout)
-        if model is None:
-            return self._embed_deterministically(normalized)
-        return np.asarray(
-            model.encode(
-                normalized,
-                normalize_embeddings=True,
-                convert_to_numpy=True,
-            ),
-            dtype=np.float32,
-        )
+        # Fast path: return cached embedding (copy so callers can mutate freely)
+        with self._lock:
+            if normalized in self._embed_cache:
+                self._embed_cache.move_to_end(normalized)
+                return np.frombuffer(self._embed_cache[normalized], dtype=np.float32).copy()
+
+        if self.uses_deterministic_mode:
+            # Canonical deterministic path — always safe to cache.
+            result = self._embed_deterministically(normalized)
+            should_cache = True
+        else:
+            model = self._resolve_model(wait_timeout)
+            if model is None:
+                # Transient fallback: warmup timed-out or failed.
+                # Do NOT cache — once the model finishes loading, subsequent
+                # calls should get real embeddings, not stale deterministic ones.
+                result = self._embed_deterministically(normalized)
+                should_cache = False
+            else:
+                result = np.asarray(
+                    model.encode(
+                        normalized,
+                        normalize_embeddings=True,
+                        convert_to_numpy=True,
+                    ),
+                    dtype=np.float32,
+                )
+                should_cache = True
+
+        # Store in cache only when the result is canonical (not a transient fallback)
+        if should_cache:
+            blob = result.tobytes()
+            with self._lock:
+                if normalized in self._embed_cache:
+                    # Already written by a concurrent caller — just refresh LRU order
+                    self._embed_cache.move_to_end(normalized)
+                else:
+                    if len(self._embed_cache) >= self._embed_cache_maxsize:
+                        self._embed_cache.popitem(last=False)
+                    self._embed_cache[normalized] = blob
+        return result
 
     def embed_batch(self, texts: list[str], *, wait_timeout: float = 30.0) -> np.ndarray:
         if not texts:
