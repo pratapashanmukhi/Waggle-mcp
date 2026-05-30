@@ -37,12 +37,11 @@ class RateLimiter:
 
             if not window and key in bucket:
                 del bucket[key]
-                window = deque()
 
             if len(window) >= limit:
                 raise RateLimitExceededError()
 
-            window.append(now)
+            bucket[key].append(now)
 
     @asynccontextmanager
     async def concurrency_slot(self, key: str):
