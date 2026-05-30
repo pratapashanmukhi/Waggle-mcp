@@ -3114,6 +3114,7 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
     async def graph_transcripts(request: Request) -> Response:
         scope = _scope_from_request(request)
         limit = int(request.query_params.get("limit", "200") or "200")
+        offset = int(request.query_params.get("offset", "0") or "0")
         query_text = request.query_params.get("query", "").strip()
         graph, _ = _require_http_scope(request, "graph:read")
         if query_text and hasattr(graph, "search_transcript_records"):
@@ -3134,18 +3135,24 @@ def create_http_application(app_server: WaggleServer, config: AppConfig) -> Star
             )
         if not hasattr(graph, "list_transcript_records"):
             raise ValidationFailure("Transcript listing is not available in this backend.")
-        records = graph.list_transcript_records(limit=limit, **scope)
+        records = graph.list_transcript_records(limit=limit, offset=offset, **scope)
+        total_count = graph.count_transcript_records(**scope)
         _emit_http_audit(
             request,
             event_type="record.read",
             resource_type="transcript_records",
             action="read",
-            metadata={"mode": "chronological", "limit": limit},
+            metadata={"mode": "chronological", "limit": limit, "offset": offset},
         )
         return JSONResponse(
             {
                 "mode": "chronological",
                 "records": [record.model_dump(mode="json") for record in records],
+                "pagination": {
+                    "offset": offset,
+                    "limit": limit,
+                    "total_count": total_count,
+                },
             }
         )
 
