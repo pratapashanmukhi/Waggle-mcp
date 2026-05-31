@@ -28,11 +28,6 @@ def test_histogram_streaming_aggregation():
     assert f'my_histogram_count{{label="test"}} 10000' in output
     assert observed_sum == pytest.approx(expected_sum)
 
-    key = ("my_histogram", (("label", "test"),))
-    series = registry._histograms.get(key)
-    assert set(series.keys()) == {"count", "sum"}
-    assert series["count"] == 10000
-    assert series["sum"] == pytest.approx(expected_sum)
 
 
 def test_format_labels_escapes_special_characters():

@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import threading
 from collections import Counter, defaultdict
+from typing import TypedDict
+
+
+class HistogramSeries(TypedDict):
+    count: int
+    sum: float
 
 
 class MetricsRegistry:
@@ -10,7 +16,7 @@ class MetricsRegistry:
         self._counters: Counter[tuple[str, tuple[tuple[str, str], ...]]] = Counter()
         self._gauges: dict[tuple[str, tuple[tuple[str, str], ...]], float] = {}
         self._histograms: defaultdict[
-            tuple[str, tuple[tuple[str, str], ...]], dict[str, int | float]
+            tuple[str, tuple[tuple[str, str], ...]], HistogramSeries
         ] = defaultdict(lambda: {"count": 0, "sum": 0.0})
 
     def increment(self, name: str, value: int = 1, **labels: str) -> None:
