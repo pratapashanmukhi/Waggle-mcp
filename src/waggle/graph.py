@@ -5637,7 +5637,21 @@ class MemoryGraph:
         """
         result = ObservationResult()
         stored_candidate_records: list[tuple[Node, list[str]]] = []
-        for candidate in candidates:
+        _candidate_texts = [str(c["content"]) for c in candidates]
+        _batch_embeddings: np.ndarray | None = None
+        if _candidate_texts:
+            try:
+                _batch_embeddings = self.embedding_model.embed_batch(_candidate_texts)
+                if _batch_embeddings is not None and len(_batch_embeddings) != len(_candidate_texts):
+                    raise ValueError(
+                        f"embed_batch returned {len(_batch_embeddings)} vectors, expected {len(_candidate_texts)}"
+                    )
+            except (AttributeError, NotImplementedError):
+                # embed_batch is not available on this model backend (e.g. a test
+                # stub).  Fall back gracefully: add_node will call embed() itself.
+                _batch_embeddings = None
+
+        for _idx, candidate in enumerate(candidates):
             candidate_tags = list(candidate.get("tags", []))
             speaker_tag = next((tag for tag in candidate_tags if str(tag).startswith("speaker:")), "")
             speaker = speaker_tag.split(":", 1)[1] if ":" in speaker_tag else "user"
@@ -5649,6 +5663,11 @@ class MemoryGraph:
                 turn_index=turn_index,
                 observed_at=observed_at,
                 session_id=session_id,
+            )
+            # Pass the pre-computed vector when available; otherwise let add_node
+            # fall back to its own embed() call (preserves backward-compatibility).
+            _precomputed: np.ndarray | None = (
+                _batch_embeddings[_idx] if _batch_embeddings is not None and _idx < len(_batch_embeddings) else None
             )
             store_result = self.add_node(
                 label=str(candidate["label"]),
@@ -5662,6 +5681,7 @@ class MemoryGraph:
                 session_id=session_id,
                 evidence_records=[evidence],
                 valid_from=observed_at,
+                embedding=_precomputed,
                 connection=connection,
             )
             result.stored_nodes.append(store_result.node)
