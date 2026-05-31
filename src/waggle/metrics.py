@@ -55,5 +55,9 @@ class MetricsRegistry:
     def _format_labels(labels: tuple[tuple[str, str], ...]) -> str:
         if not labels:
             return ""
-        pairs = ",".join(f'{key}="{value}"' for key, value in labels)
+
+        def escape(value: str) -> str:
+            return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+        pairs = ",".join(f'{key}="{escape(value)}"' for key, value in labels)
         return "{" + pairs + "}"
