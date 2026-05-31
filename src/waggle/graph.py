@@ -914,7 +914,7 @@ class MemoryGraph:
                         "Migrating database %s from %s to WAL mode",
                         self.db_path,
                         journal_mode,
-                        )
+                    )
                     connection.execute("PRAGMA journal_mode=WAL")
             except Exception as e:
                 LOGGER.warning("Could not verify journal mode: %s", e)
@@ -5860,7 +5860,7 @@ class MemoryGraph:
                         "Failed to persist verbatim turn %s: %s",
                         turn_pair_id,
                         verbatim_err,
-                        )
+                    )
                     raise
                 # ===== STEP 2: RUN EXTRACTION IN TRY/EXCEPT (NON-BLOCKING) =====
                 extraction_candidates = []
@@ -5874,10 +5874,10 @@ class MemoryGraph:
                         "Extraction failed for turn %s: %s",
                         turn_pair_id,
                         extraction_err,
-                        )
+                    )
                     result.extraction_errors.append(
                         f"Extraction exception: {type(extraction_err).__name__}: {extraction_err!s}"
-                        )
+                    )
                     # Continue: verbatim is stored, extraction is optional enrichment
 
                 # ===== STEP 3: APPLY EXTRACTED CANDIDATES (IF ANY) =====
@@ -5913,10 +5913,10 @@ class MemoryGraph:
                             "Candidate application failed for turn %s: %s",
                             turn_pair_id,
                             candidate_err,
-                            )
+                        )
                         result.extraction_errors.append(
                             f"Candidate storage exception: {type(candidate_err).__name__}: {candidate_err!s}"
-                            )
+                        )
                         # Continue: verbatim persists regardless
 
                 # ===== STEP 4: WINDOW CONTEXT AND EDGES (SAME AS BEFORE) =====
@@ -5927,10 +5927,11 @@ class MemoryGraph:
                     self._update_window_node_count(connection, window_id)
                     self._mark_window_embedding_stale(connection, window_id)
                 except Exception as window_err:
-                    logger.warning("Window context update failed for turn %s: %s",
-                                   turn_pair_id,
-                                   window_err,
-                                   )
+                    logger.warning(
+                        "Window context update failed for turn %s: %s",
+                        turn_pair_id,
+                        window_err,
+                    )
                     result.extraction_errors.append(f"Window context error: {window_err!s}")
                     window_id = ""
                     repo_id = ""
@@ -5943,7 +5944,7 @@ class MemoryGraph:
                         "Context window edge derivation failed for turn %s: %s",
                         turn_pair_id,
                         edge_err,
-                        )
+                    )
                     result.extraction_errors.append(f"Edge derivation error: {edge_err!s}")
 
         return result
