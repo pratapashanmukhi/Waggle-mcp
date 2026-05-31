@@ -29,7 +29,6 @@ def test_histogram_streaming_aggregation():
     assert observed_sum == pytest.approx(expected_sum)
 
 
-
 def test_format_labels_escapes_special_characters():
     labels = (
         (
@@ -39,6 +38,3 @@ def test_format_labels_escapes_special_characters():
     )
     result = MetricsRegistry._format_labels(labels)
     assert result == '{message="quote\\" backslash\\\\ newline\\n"}'
-
-
-
