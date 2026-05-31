@@ -137,6 +137,9 @@ WRITE_HEAVY_TOOLS = {
     "store_edge",
     "decompose_and_store",
     "observe_conversation",
+    "clear_session",
+    "clear_project",
+    "clear_all",
     # git-vocabulary names (canonical)
     "pull",
     "merge",
@@ -1022,11 +1025,16 @@ class WaggleServer:
                 name="clear_session",
                 description=(
                     "Delete all memory data for one session/context window stream, including nodes, transcripts, "
-                    "context windows, and connected edges. Requires confirm=true."
+                    "context windows, and connected edges. Supports dry_run preview. Requires confirm=true."
                 ),
                 inputSchema=_object_input_schema(
                     {
                         "session_id": {"type": "string", "description": "Session identifier to clear."},
+                        "dry_run": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Preview clear operation without deleting data.",
+                        },
                         "confirm": {
                             "type": "boolean",
                             "default": False,
@@ -1040,11 +1048,16 @@ class WaggleServer:
                 name="clear_project",
                 description=(
                     "Delete all memory data for one project/repository, including nodes, transcripts, repos, "
-                    "context windows, and connected edges. Requires confirm=true."
+                    "context windows, and connected edges. Supports dry_run preview. Requires confirm=true."
                 ),
                 inputSchema=_object_input_schema(
                     {
                         "project": {"type": "string", "description": "Project/repository scope to clear."},
+                        "dry_run": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Preview clear operation without deleting data.",
+                        },
                         "confirm": {
                             "type": "boolean",
                             "default": False,
@@ -1057,11 +1070,16 @@ class WaggleServer:
             types.Tool(
                 name="clear_all",
                 description=(
-                    "Delete all graph memory data for the current tenant. Requires confirm=true. "
+                    "Delete all graph memory data for the current tenant. Supports dry_run preview. Requires confirm=true. "
                     "This does not remove API keys or tenant metadata."
                 ),
                 inputSchema=_object_input_schema(
                     {
+                        "dry_run": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Preview clear operation without deleting data.",
+                        },
                         "confirm": {
                             "type": "boolean",
                             "default": False,
@@ -1979,26 +1997,38 @@ class WaggleServer:
                         {"id": node.id, "label": node.label, "tenant_id": node.tenant_id},
                     )
                 elif name == "clear_session":
-                    self._require_clear_confirmation(arguments, "clear_session")
-                    cleared = graph.clear_session(session_id=arguments["session_id"])
+                    dry_run = bool(arguments.get("dry_run", False))
+                    if not dry_run:
+                        self._require_clear_confirmation(arguments, "clear_session")
+                    cleared = graph.clear_session(session_id=arguments["session_id"], dry_run=dry_run)
+                    prefix = "[Preview] Would clear" if dry_run else "Cleared"
+                    verb = "Would delete" if dry_run else "Deleted"
                     result = self._tool_result(
-                        f"Cleared session '{cleared.session_id}'. Deleted {cleared.deleted_nodes} node(s), "
+                        f"{prefix} session '{cleared.session_id}'. {verb} {cleared.deleted_nodes} node(s), "
                         f"{cleared.deleted_edges} edge(s), and {cleared.deleted_transcripts} transcript record(s).",
                         self._clear_scope_payload(cleared),
                     )
                 elif name == "clear_project":
-                    self._require_clear_confirmation(arguments, "clear_project")
-                    cleared = graph.clear_project(project=arguments["project"])
+                    dry_run = bool(arguments.get("dry_run", False))
+                    if not dry_run:
+                        self._require_clear_confirmation(arguments, "clear_project")
+                    cleared = graph.clear_project(project=arguments["project"], dry_run=dry_run)
+                    prefix = "[Preview] Would clear" if dry_run else "Cleared"
+                    verb = "Would delete" if dry_run else "Deleted"
                     result = self._tool_result(
-                        f"Cleared project '{cleared.project}'. Deleted {cleared.deleted_nodes} node(s), "
+                        f"{prefix} project '{cleared.project}'. {verb} {cleared.deleted_nodes} node(s), "
                         f"{cleared.deleted_edges} edge(s), and {cleared.deleted_transcripts} transcript record(s).",
                         self._clear_scope_payload(cleared),
                     )
                 elif name == "clear_all":
-                    self._require_clear_confirmation(arguments, "clear_all")
-                    cleared = graph.clear_all()
+                    dry_run = bool(arguments.get("dry_run", False))
+                    if not dry_run:
+                        self._require_clear_confirmation(arguments, "clear_all")
+                    cleared = graph.clear_all(dry_run=dry_run)
+                    prefix = "[Preview] Would clear" if dry_run else "Cleared"
+                    verb = "Would delete" if dry_run else "Deleted"
                     result = self._tool_result(
-                        f"Cleared all graph memory data for tenant '{graph.tenant_id}'. Deleted {cleared.deleted_nodes} node(s), "
+                        f"{prefix} all graph memory data for tenant '{graph.tenant_id}'. {verb} {cleared.deleted_nodes} node(s), "
                         f"{cleared.deleted_edges} edge(s), and {cleared.deleted_transcripts} transcript record(s).",
                         self._clear_scope_payload(cleared),
                     )
@@ -2850,8 +2880,9 @@ class MCPHttpApp:
             )
 
             tool_name = self._extract_tool_name(body)
-            principal.require_scope("graph:write" if tool_name in WRITE_HEAVY_TOOLS else "graph:read")
-            await self.rate_limiter.check_rate(principal.api_key_id, is_write=tool_name in WRITE_HEAVY_TOOLS)
+            is_write = self._is_write_operation(tool_name, body)
+            principal.require_scope("graph:write" if is_write else "graph:read")
+            await self.rate_limiter.check_rate(principal.api_key_id, is_write=is_write)
             async with self.rate_limiter.concurrency_slot(principal.api_key_id):
                 with runtime_context(
                     request_id=request_id,
@@ -2896,6 +2927,24 @@ class MCPHttpApp:
         if isinstance(params, dict):
             return str(params.get("name", ""))
         return ""
+
+    @staticmethod
+    def _is_write_operation(tool_name: str, body: bytes) -> bool:
+        if tool_name not in WRITE_HEAVY_TOOLS:
+            return False
+        if tool_name in {"clear_session", "clear_project", "clear_all"}:
+            if body:
+                try:
+                    payload = json.loads(body)
+                    params = payload.get("params", {})
+                    if isinstance(params, dict):
+                        arguments = params.get("arguments", {})
+                        if isinstance(arguments, dict):
+                            if bool(arguments.get("dry_run", False)):
+                                return False
+                except json.JSONDecodeError:
+                    pass
+        return True
 
     @staticmethod
     def _replay_receive(body: bytes):
@@ -4167,23 +4216,30 @@ def _build_parser() -> argparse.ArgumentParser:
 
     clear_session = subparsers.add_parser(
         "clear-session",
-        help="Delete all graph memory data for one session.",
+        help="Delete all graph memory data for one session. (Supports dry-run preview)",
     )
     clear_session.add_argument("--session-id", required=True)
     clear_session.add_argument("--yes", action="store_true", help="Confirm the destructive clear operation.")
+    clear_session.add_argument(
+        "--dry-run", action="store_true", help="Preview the clear operation without deleting data."
+    )
 
     clear_project = subparsers.add_parser(
         "clear-project",
-        help="Delete all graph memory data for one project/repository scope.",
+        help="Delete all graph memory data for one project/repository scope. (Supports dry-run preview)",
     )
     clear_project.add_argument("--project", required=True)
     clear_project.add_argument("--yes", action="store_true", help="Confirm the destructive clear operation.")
+    clear_project.add_argument(
+        "--dry-run", action="store_true", help="Preview the clear operation without deleting data."
+    )
 
     clear_all = subparsers.add_parser(
         "clear-all",
-        help="Delete all graph memory data for the current tenant.",
+        help="Delete all graph memory data for the current tenant. (Supports dry-run preview)",
     )
     clear_all.add_argument("--yes", action="store_true", help="Confirm the destructive clear operation.")
+    clear_all.add_argument("--dry-run", action="store_true", help="Preview the clear operation without deleting data.")
 
     import_abhi = subparsers.add_parser(
         "import",
@@ -4753,21 +4809,24 @@ def _run_admin_command(config: AppConfig, args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2))
         return 0
     if args.command == "clear-session":
-        if not bool(getattr(args, "yes", False)):
+        dry_run = bool(getattr(args, "dry_run", False))
+        if not dry_run and not bool(getattr(args, "yes", False)):
             raise ValidationFailure("clear-session is destructive and requires --yes.")
-        cleared = backend.clear_session(session_id=args.session_id)
+        cleared = backend.clear_session(session_id=args.session_id, dry_run=dry_run)
         print(json.dumps(cleared.model_dump(mode="json"), indent=2))
         return 0
     if args.command == "clear-project":
-        if not bool(getattr(args, "yes", False)):
+        dry_run = bool(getattr(args, "dry_run", False))
+        if not dry_run and not bool(getattr(args, "yes", False)):
             raise ValidationFailure("clear-project is destructive and requires --yes.")
-        cleared = backend.clear_project(project=args.project)
+        cleared = backend.clear_project(project=args.project, dry_run=dry_run)
         print(json.dumps(cleared.model_dump(mode="json"), indent=2))
         return 0
     if args.command == "clear-all":
-        if not bool(getattr(args, "yes", False)):
+        dry_run = bool(getattr(args, "dry_run", False))
+        if not dry_run and not bool(getattr(args, "yes", False)):
             raise ValidationFailure("clear-all is destructive and requires --yes.")
-        cleared = backend.clear_all()
+        cleared = backend.clear_all(dry_run=dry_run)
         print(json.dumps(cleared.model_dump(mode="json"), indent=2))
         return 0
     if args.command == "import":

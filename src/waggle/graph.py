@@ -4278,49 +4278,52 @@ class MemoryGraph:
             )
             return node
 
-    def clear_session(self, *, session_id: str) -> ClearScopeResult:
+    def clear_session(self, *, session_id: str, dry_run: bool = False) -> ClearScopeResult:
         normalized_session = session_id.strip()
         if not normalized_session:
             raise ValueError("session_id is required.")
         with self._lock, self._connect() as connection:
-            result = self._clear_scope_rows(connection, scope="session", session_id=normalized_session)
-            self.emit_audit_event(
-                event_type="graph.scope_cleared",
-                resource_type="session",
-                resource_id=normalized_session,
-                action="delete",
-                metadata=result.model_dump(mode="json"),
-                connection=connection,
-            )
+            result = self._clear_scope_rows(connection, scope="session", session_id=normalized_session, dry_run=dry_run)
+            if not dry_run:
+                self.emit_audit_event(
+                    event_type="graph.scope_cleared",
+                    resource_type="session",
+                    resource_id=normalized_session,
+                    action="delete",
+                    metadata=result.model_dump(mode="json"),
+                    connection=connection,
+                )
             return result
 
-    def clear_project(self, *, project: str) -> ClearScopeResult:
+    def clear_project(self, *, project: str, dry_run: bool = False) -> ClearScopeResult:
         normalized_project = project.strip()
         if not normalized_project:
             raise ValueError("project is required.")
         with self._lock, self._connect() as connection:
-            result = self._clear_scope_rows(connection, scope="project", project=normalized_project)
-            self.emit_audit_event(
-                event_type="graph.scope_cleared",
-                resource_type="project",
-                resource_id=normalized_project,
-                action="delete",
-                metadata=result.model_dump(mode="json"),
-                connection=connection,
-            )
+            result = self._clear_scope_rows(connection, scope="project", project=normalized_project, dry_run=dry_run)
+            if not dry_run:
+                self.emit_audit_event(
+                    event_type="graph.scope_cleared",
+                    resource_type="project",
+                    resource_id=normalized_project,
+                    action="delete",
+                    metadata=result.model_dump(mode="json"),
+                    connection=connection,
+                )
             return result
 
-    def clear_all(self) -> ClearScopeResult:
+    def clear_all(self, *, dry_run: bool = False) -> ClearScopeResult:
         with self._lock, self._connect() as connection:
-            result = self._clear_scope_rows(connection, scope="all")
-            self.emit_audit_event(
-                event_type="graph.scope_cleared",
-                resource_type="tenant",
-                resource_id=self.tenant_id,
-                action="delete",
-                metadata=result.model_dump(mode="json"),
-                connection=connection,
-            )
+            result = self._clear_scope_rows(connection, scope="all", dry_run=dry_run)
+            if not dry_run:
+                self.emit_audit_event(
+                    event_type="graph.scope_cleared",
+                    resource_type="tenant",
+                    resource_id=self.tenant_id,
+                    action="delete",
+                    metadata=result.model_dump(mode="json"),
+                    connection=connection,
+                )
             return result
 
     def _clear_scope_rows(
@@ -4330,16 +4333,18 @@ class MemoryGraph:
         scope: str,
         project: str = "",
         session_id: str = "",
+        dry_run: bool = False,
     ) -> ClearScopeResult:
-        result = ClearScopeResult(scope=scope, project=project, session_id=session_id)
+        result = ClearScopeResult(scope=scope, project=project, session_id=session_id, dry_run=dry_run)
+        if not dry_run:
+            connection.execute("BEGIN IMMEDIATE")
+
         if scope == "all":
-            node_ids = [
-                str(row["id"])
-                for row in connection.execute(
-                    "SELECT id FROM nodes WHERE tenant_id = ?",
-                    (self.tenant_id,),
-                ).fetchall()
-            ]
+            node_rows = connection.execute(
+                "SELECT id, node_type FROM nodes WHERE tenant_id = ?",
+                (self.tenant_id,),
+            ).fetchall()
+            node_ids = [str(row["id"]) for row in node_rows]
             window_ids = [
                 str(row["id"])
                 for row in connection.execute(
@@ -4354,14 +4359,26 @@ class MemoryGraph:
                     (self.tenant_id,),
                 ).fetchall()
             ]
-            result.deleted_graph_ui_rows = connection.execute(
-                "DELETE FROM graph_ui_state WHERE tenant_id = ?",
-                (self.tenant_id,),
-            ).rowcount
-            result.deleted_transcripts = connection.execute(
-                "DELETE FROM transcript_records WHERE tenant_id = ?",
-                (self.tenant_id,),
-            ).rowcount
+            if dry_run:
+                result.deleted_graph_ui_rows = connection.execute(
+                    "SELECT COUNT(*) FROM graph_ui_state WHERE tenant_id = ?",
+                    (self.tenant_id,),
+                ).fetchone()[0]
+                result.deleted_transcripts = connection.execute(
+                    "SELECT COUNT(*) FROM transcript_records WHERE tenant_id = ?",
+                    (self.tenant_id,),
+                ).fetchone()[0]
+            else:
+                cursor = connection.execute(
+                    "DELETE FROM graph_ui_state WHERE tenant_id = ?",
+                    (self.tenant_id,),
+                )
+                result.deleted_graph_ui_rows = cursor.rowcount
+                cursor = connection.execute(
+                    "DELETE FROM transcript_records WHERE tenant_id = ?",
+                    (self.tenant_id,),
+                )
+                result.deleted_transcripts = cursor.rowcount
         elif scope == "project":
             repo_ids = [
                 str(row["id"])
@@ -4382,21 +4399,31 @@ class MemoryGraph:
                     (self.tenant_id, project),
                 ).fetchall()
             ]
-            node_ids = [
-                str(row["id"])
-                for row in connection.execute(
-                    "SELECT id FROM nodes WHERE tenant_id = ? AND project = ?",
+            node_rows = connection.execute(
+                "SELECT id, node_type FROM nodes WHERE tenant_id = ? AND project = ?",
+                (self.tenant_id, project),
+            ).fetchall()
+            node_ids = [str(row["id"]) for row in node_rows]
+            if dry_run:
+                result.deleted_graph_ui_rows = connection.execute(
+                    "SELECT COUNT(*) FROM graph_ui_state WHERE tenant_id = ? AND project = ?",
                     (self.tenant_id, project),
-                ).fetchall()
-            ]
-            result.deleted_graph_ui_rows = connection.execute(
-                "DELETE FROM graph_ui_state WHERE tenant_id = ? AND project = ?",
-                (self.tenant_id, project),
-            ).rowcount
-            result.deleted_transcripts = connection.execute(
-                "DELETE FROM transcript_records WHERE tenant_id = ? AND project = ?",
-                (self.tenant_id, project),
-            ).rowcount
+                ).fetchone()[0]
+                result.deleted_transcripts = connection.execute(
+                    "SELECT COUNT(*) FROM transcript_records WHERE tenant_id = ? AND project = ?",
+                    (self.tenant_id, project),
+                ).fetchone()[0]
+            else:
+                cursor = connection.execute(
+                    "DELETE FROM graph_ui_state WHERE tenant_id = ? AND project = ?",
+                    (self.tenant_id, project),
+                )
+                result.deleted_graph_ui_rows = cursor.rowcount
+                cursor = connection.execute(
+                    "DELETE FROM transcript_records WHERE tenant_id = ? AND project = ?",
+                    (self.tenant_id, project),
+                )
+                result.deleted_transcripts = cursor.rowcount
         elif scope == "session":
             repo_ids = []
             window_ids = [
@@ -4406,58 +4433,109 @@ class MemoryGraph:
                     (self.tenant_id, session_id),
                 ).fetchall()
             ]
-            node_ids = [
-                str(row["id"])
-                for row in connection.execute(
-                    "SELECT id FROM nodes WHERE tenant_id = ? AND session_id = ?",
+            node_rows = connection.execute(
+                "SELECT id, node_type FROM nodes WHERE tenant_id = ? AND session_id = ?",
+                (self.tenant_id, session_id),
+            ).fetchall()
+            node_ids = [str(row["id"]) for row in node_rows]
+            if dry_run:
+                result.deleted_graph_ui_rows = connection.execute(
+                    "SELECT COUNT(*) FROM graph_ui_state WHERE tenant_id = ? AND session_id = ?",
                     (self.tenant_id, session_id),
-                ).fetchall()
-            ]
-            result.deleted_graph_ui_rows = connection.execute(
-                "DELETE FROM graph_ui_state WHERE tenant_id = ? AND session_id = ?",
-                (self.tenant_id, session_id),
-            ).rowcount
-            result.deleted_transcripts = connection.execute(
-                "DELETE FROM transcript_records WHERE tenant_id = ? AND session_id = ?",
-                (self.tenant_id, session_id),
-            ).rowcount
+                ).fetchone()[0]
+                result.deleted_transcripts = connection.execute(
+                    "SELECT COUNT(*) FROM transcript_records WHERE tenant_id = ? AND session_id = ?",
+                    (self.tenant_id, session_id),
+                ).fetchone()[0]
+            else:
+                cursor = connection.execute(
+                    "DELETE FROM graph_ui_state WHERE tenant_id = ? AND session_id = ?",
+                    (self.tenant_id, session_id),
+                )
+                result.deleted_graph_ui_rows = cursor.rowcount
+                cursor = connection.execute(
+                    "DELETE FROM transcript_records WHERE tenant_id = ? AND session_id = ?",
+                    (self.tenant_id, session_id),
+                )
+                result.deleted_transcripts = cursor.rowcount
         else:
             raise ValueError(f"Unsupported clear scope: {scope}")
 
+        # Compute counts by node type
+        counts_by_node_type: dict[str, int] = {}
+        for row in node_rows:
+            nt = str(row["node_type"])
+            counts_by_node_type[nt] = counts_by_node_type.get(nt, 0) + 1
+        result.counts_by_node_type = counts_by_node_type
+
         if node_ids:
             placeholders = ", ".join("?" for _ in node_ids)
-            result.deleted_edges = connection.execute(
-                f"""
-                DELETE FROM edges
-                WHERE tenant_id = ? AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))
-                """,
-                (self.tenant_id, *node_ids, *node_ids),
-            ).rowcount
-            result.deleted_nodes = connection.execute(
-                f"DELETE FROM nodes WHERE tenant_id = ? AND id IN ({placeholders})",
-                (self.tenant_id, *node_ids),
-            ).rowcount
+            if dry_run:
+                result.deleted_edges = connection.execute(
+                    f"""
+                    SELECT COUNT(*) FROM edges
+                    WHERE tenant_id = ? AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))
+                    """,
+                    (self.tenant_id, *node_ids, *node_ids),
+                ).fetchone()[0]
+                result.deleted_nodes = len(node_ids)
+            else:
+                cursor = connection.execute(
+                    f"""
+                    DELETE FROM edges
+                    WHERE tenant_id = ? AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))
+                    """,
+                    (self.tenant_id, *node_ids, *node_ids),
+                )
+                result.deleted_edges = cursor.rowcount
+                cursor = connection.execute(
+                    f"DELETE FROM nodes WHERE tenant_id = ? AND id IN ({placeholders})",
+                    (self.tenant_id, *node_ids),
+                )
+                result.deleted_nodes = cursor.rowcount
 
         if window_ids:
             placeholders = ", ".join("?" for _ in window_ids)
-            result.deleted_context_window_edges = connection.execute(
-                f"""
-                DELETE FROM context_window_edges
-                WHERE tenant_id = ? AND (source_window_id IN ({placeholders}) OR target_window_id IN ({placeholders}))
-                """,
-                (self.tenant_id, *window_ids, *window_ids),
-            ).rowcount
-            result.deleted_context_windows = connection.execute(
-                f"DELETE FROM context_windows WHERE tenant_id = ? AND id IN ({placeholders})",
-                (self.tenant_id, *window_ids),
-            ).rowcount
+            if dry_run:
+                result.deleted_context_window_edges = connection.execute(
+                    f"""
+                    SELECT COUNT(*) FROM context_window_edges
+                    WHERE tenant_id = ? AND (source_window_id IN ({placeholders}) OR target_window_id IN ({placeholders}))
+                    """,
+                    (self.tenant_id, *window_ids, *window_ids),
+                ).fetchone()[0]
+                result.deleted_context_windows = connection.execute(
+                    f"SELECT COUNT(*) FROM context_windows WHERE tenant_id = ? AND id IN ({placeholders})",
+                    (self.tenant_id, *window_ids),
+                ).fetchone()[0]
+            else:
+                cursor = connection.execute(
+                    f"""
+                    DELETE FROM context_window_edges
+                    WHERE tenant_id = ? AND (source_window_id IN ({placeholders}) OR target_window_id IN ({placeholders}))
+                    """,
+                    (self.tenant_id, *window_ids, *window_ids),
+                )
+                result.deleted_context_window_edges = cursor.rowcount
+                cursor = connection.execute(
+                    f"DELETE FROM context_windows WHERE tenant_id = ? AND id IN ({placeholders})",
+                    (self.tenant_id, *window_ids),
+                )
+                result.deleted_context_windows = cursor.rowcount
 
         if repo_ids:
             placeholders = ", ".join("?" for _ in repo_ids)
-            result.deleted_repos = connection.execute(
-                f"DELETE FROM repos WHERE tenant_id = ? AND id IN ({placeholders})",
-                (self.tenant_id, *repo_ids),
-            ).rowcount
+            if dry_run:
+                result.deleted_repos = connection.execute(
+                    f"SELECT COUNT(*) FROM repos WHERE tenant_id = ? AND id IN ({placeholders})",
+                    (self.tenant_id, *repo_ids),
+                ).fetchone()[0]
+            else:
+                cursor = connection.execute(
+                    f"DELETE FROM repos WHERE tenant_id = ? AND id IN ({placeholders})",
+                    (self.tenant_id, *repo_ids),
+                )
+                result.deleted_repos = cursor.rowcount
         elif scope == "all":
             result.deleted_repos = len(repo_ids)
 

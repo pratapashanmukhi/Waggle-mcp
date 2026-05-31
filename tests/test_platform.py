@@ -766,3 +766,192 @@ def test_graph_update_edge_rejects_invalid_weight(tmp_path: Path) -> None:
             headers=headers,
         )
         assert resp.status_code == 200
+
+
+def test_clear_tools_permissions(tmp_path: Path) -> None:
+    graph = make_graph(tmp_path)
+    app_server = WaggleServer(graph=graph, config=make_http_config(tmp_path))
+    read_only_key = graph.create_api_key("tenant-http", "reader", scopes=["graph:read"])
+    write_key = graph.create_api_key("tenant-http", "writer", scopes=["graph:read", "graph:write"])
+    app = create_http_application(app_server, app_server.config)
+
+    with TestClient(app) as client:
+        # --- clear_session ---
+        # 1. dry_run=True with read scope -> 200 OK
+        resp = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "tools/call",
+                "params": {
+                    "name": "clear_session",
+                    "arguments": {
+                        "session_id": "sess-abc",
+                        "dry_run": True,
+                        "confirm": True,
+                    },
+                },
+            },
+            headers={"X-API-Key": read_only_key.raw_api_key, "accept": "application/json, text/event-stream"},
+        )
+        assert resp.status_code == 200
+
+        # 2. dry_run=False with read scope -> 403 Forbidden
+        resp = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": "2",
+                "method": "tools/call",
+                "params": {
+                    "name": "clear_session",
+                    "arguments": {
+                        "session_id": "sess-abc",
+                        "dry_run": False,
+                        "confirm": True,
+                    },
+                },
+            },
+            headers={"X-API-Key": read_only_key.raw_api_key, "accept": "application/json, text/event-stream"},
+        )
+        assert resp.status_code == 403
+
+        # 3. dry_run=False with write scope -> 200 OK
+        resp = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": "3",
+                "method": "tools/call",
+                "params": {
+                    "name": "clear_session",
+                    "arguments": {
+                        "session_id": "sess-abc",
+                        "dry_run": False,
+                        "confirm": True,
+                    },
+                },
+            },
+            headers={"X-API-Key": write_key.raw_api_key, "accept": "application/json, text/event-stream"},
+        )
+        assert resp.status_code == 200
+
+        # --- clear_project ---
+        # 1. dry_run=True with read scope -> 200 OK
+        resp = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": "4",
+                "method": "tools/call",
+                "params": {
+                    "name": "clear_project",
+                    "arguments": {
+                        "project": "proj-abc",
+                        "dry_run": True,
+                        "confirm": True,
+                    },
+                },
+            },
+            headers={"X-API-Key": read_only_key.raw_api_key, "accept": "application/json, text/event-stream"},
+        )
+        assert resp.status_code == 200
+
+        # 2. dry_run=False with read scope -> 403 Forbidden
+        resp = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": "5",
+                "method": "tools/call",
+                "params": {
+                    "name": "clear_project",
+                    "arguments": {
+                        "project": "proj-abc",
+                        "dry_run": False,
+                        "confirm": True,
+                    },
+                },
+            },
+            headers={"X-API-Key": read_only_key.raw_api_key, "accept": "application/json, text/event-stream"},
+        )
+        assert resp.status_code == 403
+
+        # 3. dry_run=False with write scope -> 200 OK
+        resp = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": "6",
+                "method": "tools/call",
+                "params": {
+                    "name": "clear_project",
+                    "arguments": {
+                        "project": "proj-abc",
+                        "dry_run": False,
+                        "confirm": True,
+                    },
+                },
+            },
+            headers={"X-API-Key": write_key.raw_api_key, "accept": "application/json, text/event-stream"},
+        )
+        assert resp.status_code == 200
+
+        # --- clear_all ---
+        # 1. dry_run=True with read scope -> 200 OK
+        resp = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": "7",
+                "method": "tools/call",
+                "params": {
+                    "name": "clear_all",
+                    "arguments": {
+                        "dry_run": True,
+                        "confirm": True,
+                    },
+                },
+            },
+            headers={"X-API-Key": read_only_key.raw_api_key, "accept": "application/json, text/event-stream"},
+        )
+        assert resp.status_code == 200
+
+        # 2. dry_run=False with read scope -> 403 Forbidden
+        resp = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": "8",
+                "method": "tools/call",
+                "params": {
+                    "name": "clear_all",
+                    "arguments": {
+                        "dry_run": False,
+                        "confirm": True,
+                    },
+                },
+            },
+            headers={"X-API-Key": read_only_key.raw_api_key, "accept": "application/json, text/event-stream"},
+        )
+        assert resp.status_code == 403
+
+        # 3. dry_run=False with write scope -> 200 OK
+        resp = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": "9",
+                "method": "tools/call",
+                "params": {
+                    "name": "clear_all",
+                    "arguments": {
+                        "dry_run": False,
+                        "confirm": True,
+                    },
+                },
+            },
+            headers={"X-API-Key": write_key.raw_api_key, "accept": "application/json, text/event-stream"},
+        )
+        assert resp.status_code == 200
