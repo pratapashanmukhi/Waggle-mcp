@@ -2312,3 +2312,33 @@ def test_clear_scope_dry_run_and_audit_trail(tmp_path: Path) -> None:
     meta = events_real[0].metadata
     assert meta["dry_run"] is False
     assert meta["deleted_nodes"] == result_real.deleted_nodes
+
+
+def test_list_transcript_records_pagination_ordering(tmp_path: Path) -> None:
+    graph = make_graph(tmp_path)
+
+    # Insert transcripts with identical observed_at and turn_index to force tie-breaking on id
+    observed = datetime(2026, 5, 31, 12, 0, 0, tzinfo=UTC)
+    for index in range(5):
+        # We observe conversation to insert transcripts
+        graph.observe_conversation(
+            user_message=f"message {index}",
+            assistant_response=f"reply {index}",
+            project="test_proj",
+            session_id="test_sess",
+        )
+
+    # Force identical observed_at and turn_index values via SQL update
+    with graph._lock, graph._connect() as connection:
+        connection.execute(
+            "UPDATE transcript_records SET observed_at = ?, turn_index = ?",
+            (observed.isoformat(), 0),
+        )
+
+    # Fetch with limit and verify the ordering is deterministic by id (ascending)
+    records = graph.list_transcript_records(project="test_proj", limit=10)
+    assert len(records) == 10  # 5 user messages + 5 assistant responses
+
+    # Check that they are strictly sorted by database id ascending
+    ids = [record.id for record in records]
+    assert ids == sorted(ids)

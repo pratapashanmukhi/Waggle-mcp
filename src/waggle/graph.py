@@ -7467,7 +7467,7 @@ class MemoryGraph:
                        embedding_model_id, embedding_dim, content_hash, turn_pair_id, metadata
                 FROM transcript_records
                 WHERE {" AND ".join(filters)}
-                ORDER BY observed_at ASC, turn_index ASC
+                ORDER BY observed_at ASC, turn_index ASC, id ASC
                 LIMIT ?
                 """,
                 (*params, max(1, int(limit))),
@@ -8567,7 +8567,7 @@ class MemoryGraph:
                    embedding, embedding_model_id, embedding_dim, content_hash, turn_pair_id, metadata
             FROM transcript_records
             WHERE tenant_id = ?
-            ORDER BY observed_at ASC, turn_index ASC
+            ORDER BY observed_at ASC, turn_index ASC, id ASC
             """,
             (self.tenant_id,),
         ).fetchall()
