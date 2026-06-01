@@ -805,6 +805,14 @@ class ScoredNodeView:
     final_score: float = 0.0
     label_lower: str = ""  # pre-lowercased for tiebreak sort
 
+@dataclass(slots=True)
+class ScoredNodeView:
+    """Minimal scored representation of a Node for the ranking hot path."""
+
+    node_id: str
+    updated_at_ts: float
+    final_score: float = 0.0
+    label_lower: str = ""
 
 class MemoryGraph:
     """SQLite-backed graph memory with embedding-assisted retrieval."""
