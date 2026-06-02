@@ -1,5 +1,5 @@
 {
-  "version": "0.1.15",
+  "version": "0.1.0",
   "repository": "Abhigyan-Shekhar/Waggle-mcp",
   "assets": {
     "win32-x64": "waggle-mcp-windows-x64.exe",

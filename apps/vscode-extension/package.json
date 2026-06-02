@@ -2,10 +2,9 @@
   "name": "waggle-memory",
   "displayName": "Waggle: Local Memory for AI Agents",
   "description": "Local graph memory for coding agents using MCP.",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "publisher": "Abhigyan-Shekhar",
   "license": "Apache-2.0",
-  "icon": "icon.png",
   "homepage": "https://github.com/Abhigyan-Shekhar/Waggle-mcp",
   "bugs": {
     "url": "https://github.com/Abhigyan-Shekhar/Waggle-mcp/issues"
@@ -41,9 +40,15 @@
     "onCommand:waggle.openGraphStudio",
     "onCommand:waggle.showStatus",
     "onCommand:waggle.exportMemory",
-    "onCommand:waggle.openInstallDocs"
+    "onCommand:waggle.openInstallDocs",
+    "onCommand:waggle.queryMemory",
+    "onCommand:waggle.observeConversation",
+    "onView:waggle.graphStudio"
   ],
   "main": "./dist/extension.js",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  },
   "contributes": {
     "commands": [
       {
@@ -73,15 +78,41 @@
       {
         "command": "waggle.openInstallDocs",
         "title": "Waggle: Open Install Docs"
+      },
+      {
+        "command": "waggle.queryMemory",
+        "title": "Waggle: Query Memory"
+      },
+      {
+        "command": "waggle.observeConversation",
+        "title": "Waggle: Observe Conversation"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "waggle",
+          "title": "Waggle",
+          "icon": "$(graph)"
+        }
+      ]
+    },
+    "views": {
+      "waggle": [
+        {
+          "id": "waggle.graphStudio",
+          "name": "Graph Studio",
+          "type": "webview"
+        }
+      ]
+    },
     "configuration": {
       "title": "Waggle",
       "properties": {
         "waggle.commandPath": {
           "type": "string",
           "default": "waggle-mcp",
-          "description": "Command used to start the Waggle CLI."
+          "description": "Command used when installMethod is pipx."
         },
         "waggle.dbPath": {
           "type": "string",
@@ -95,14 +126,29 @@
         },
         "waggle.autoStart": {
           "type": "boolean",
-          "default": false,
-          "description": "Reserved for future automatic startup behavior."
+          "default": true,
+          "description": "Start the local Waggle HTTP server when a workspace opens."
         },
         "waggle.installMethod": {
           "type": "string",
-          "default": "pipx",
+          "default": "binary",
           "enum": ["pipx", "binary"],
-          "description": "Preferred install method."
+          "description": "Install method: bundled binary download or pipx."
+        },
+        "waggle.binaryReleaseRepo": {
+          "type": "string",
+          "default": "Abhigyan-Shekhar/Waggle-mcp",
+          "description": "GitHub owner/repo used to download release binaries."
+        },
+        "waggle.binaryVersion": {
+          "type": "string",
+          "default": "",
+          "description": "Override the GitHub release version for the bundled binary (defaults to extension version)."
+        },
+        "waggle.model": {
+          "type": "string",
+          "default": "deterministic",
+          "description": "WAGGLE_MODEL value for extension-managed server processes."
         },
         "waggle.mcpConfigScope": {
           "type": "string",
@@ -116,6 +162,7 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
+    "test": "npm run compile && node scripts/test-platform.mjs",
     "package": "vsce package"
   },
   "devDependencies": {

@@ -1,4 +1,6 @@
 src/**
 tsconfig.json
 node_modules/**
-!node_modules
+!node_modules/@modelcontextprotocol/**
+scripts/generate-bundle-metadata.mjs
+scripts/test-platform.mjs
