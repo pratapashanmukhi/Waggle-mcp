@@ -2009,11 +2009,11 @@ class MemoryGraph:
                 embeddings = None
                 try:
                     embeddings = self.embedding_model.embed_batch(texts)
-                    if embeddings is not None and len(embeddings) != len(texts):
-                        raise ValueError(f"embed_batch returned {len(embeddings)} vectors, expected {len(texts)}")
-                except (AttributeError, NotImplementedError):
+                except Exception:
                     embeddings = None
 
+                if embeddings is not None and len(embeddings) != len(texts):
+                    raise ValueError(f"embed_batch returned {len(embeddings)} vectors, expected {len(texts)}")
                 if embeddings is None:
                     for row in transcript_rows:
                         embedding, model_id, dim = self._embed_with_metadata(row["transcript_text"])
@@ -5797,12 +5797,13 @@ class MemoryGraph:
         if _candidate_texts:
             try:
                 _batch_embeddings = self.embedding_model.embed_batch(_candidate_texts)
-                if _batch_embeddings is not None and len(_batch_embeddings) != len(_candidate_texts):
-                    raise ValueError(
-                        f"embed_batch returned {len(_batch_embeddings)} vectors, expected {len(_candidate_texts)}"
-                    )
             except Exception:
                 _batch_embeddings = None
+
+            if _batch_embeddings is not None and len(_batch_embeddings) != len(_candidate_texts):
+                raise ValueError(
+                    f"embed_batch returned {len(_batch_embeddings)} vectors, expected {len(_candidate_texts)}"
+                )
 
         for _idx, candidate in enumerate(candidates):
             candidate_tags = list(candidate.get("tags", []))
