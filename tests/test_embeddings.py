@@ -49,3 +49,33 @@ def test_uncached_transformer_falls_back_to_deterministic_embeddings(monkeypatch
     assert model.uses_deterministic_mode is True
     assert vector.shape == (256,)
     assert np.isclose(np.linalg.norm(vector), 1.0)
+
+def test_embedding_cache_shared_across_instances(monkeypatch: pytest.MonkeyPatch) -> None:
+    class CountingModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def encode(
+            self,
+            text,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+        ):
+            self.calls += 1
+            return np.array([1.0, 2.0, 3.0], dtype=np.float32)
+
+    counting_model = CountingModel()
+
+    monkeypatch.setattr(
+        EmbeddingModel,
+        "_resolve_model",
+        lambda self, timeout: counting_model,
+    )
+
+    model_a = EmbeddingModel("shared-model")
+    model_b = EmbeddingModel("shared-model")
+
+    model_a.embed("foo")
+    model_b.embed("foo")
+
+    assert counting_model.calls == 1
