@@ -135,6 +135,11 @@
           "default": "",
           "description": "Override the GitHub release version for the bundled binary (defaults to extension version)."
         },
+        "waggle.binaryAllowLatestFallback": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, use GitHub releases/latest when the requested version tag is missing. Cache keys match the resolved release version."
+        },
         "waggle.model": {
           "type": "string",
           "default": "deterministic",
@@ -151,13 +156,15 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "test": "npm run compile && node scripts/test-platform.mjs",
+    "compile": "node esbuild.mjs",
+    "typecheck": "tsc -p ./ --noEmit",
+    "test:smoke": "npm run compile && node scripts/test-platform.mjs",
     "package": "vsce package"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/vscode": "^1.96.0",
+    "esbuild": "^0.25.0",
     "typescript": "^5.7.2",
     "@vscode/vsce": "^3.2.2"
   }

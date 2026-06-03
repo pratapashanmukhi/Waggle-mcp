@@ -1,11 +1,12 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
 export async function callStdioTool(
   command: string,
   env: Record<string, string>,
   toolName: string,
   args: Record<string, unknown>
 ): Promise<unknown> {
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-  const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
   const transport = new StdioClientTransport({
     command,
     args: ["serve", "--transport", "stdio"],
