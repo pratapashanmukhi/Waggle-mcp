@@ -1,170 +1,165 @@
-"""A small, thread-safe SQLite connection pool.
+"""A small, thread-safe pool of pre-configured SQLite connections.
 
-Every graph operation used to call ``MemoryGraph._connect()``, which creates a
-fresh ``sqlite3.Connection``, sets ``row_factory``, and runs seven ``PRAGMA``
-statements. With WAL mode SQLite supports concurrent readers plus a single
-writer, so connections can be safely reused, skipping that per-call setup cost.
+Every graph operation in :mod:`waggle.graph` used to call
+``MemoryGraph._connect()``, which opened a brand-new :class:`sqlite3.Connection`,
+set ``row_factory``, and executed seven ``PRAGMA`` statements (WAL,
+``synchronous``, ``busy_timeout``, ``foreign_keys``, ``mmap_size``,
+``temp_store``, ``cache_size``).  With more than 70 call sites, that meant a
+fresh connection and a fresh round of ``PRAGMA`` execution on every read and
+write.
 
-``ConnectionPool`` pre-creates a small number of fully-configured connections
-and hands them out through a context manager:
+Under WAL mode SQLite supports many concurrent readers plus a single writer, so
+connections can safely be reused.  :class:`SQLiteConnectionPool` pre-creates a
+small, fixed number of connections, configures the ``PRAGMA`` statements exactly
+once per connection at creation time, and hands them out through a context
+manager that returns the connection to the pool on exit.
 
-    with pool.checkout() as conn:
-        conn.execute(...)
-
-The ``checkout`` context manager mirrors the semantics of using a
-``sqlite3.Connection`` as a context manager: it commits on success and rolls
-back on error. On exit the connection is returned to the pool instead of being
-closed, so the next caller reuses it.
-
-Design notes
-------------
-- **Bounded.** At most ``size`` connections are *retained*. SQLite WAL allows a
-  single writer regardless of pool size, so a large pool only wastes file
-  handles; the default of 4 is plenty.
-- **Overflow instead of blocking.** If every pooled connection is already
-  checked out (nested or concurrent callers), ``checkout`` creates a temporary
-  connection rather than blocking. That temporary connection is closed on
-  return once the retained pool is full, so the pool can never deadlock and the
-  retained count stays bounded.
-- **Cross-thread reuse.** Pooled connections are created with
-  ``check_same_thread=False`` (the factory's responsibility) because callers may
-  run on different worker threads. The pool guarantees a connection is only ever
-  handed to one caller at a time, so this is safe.
-- **Self-healing.** A connection that errors out is discarded rather than
-  returned, so a connection left in a bad transaction state is never reused; the
-  next exhausted checkout transparently creates a replacement.
+The pool is deliberately small.  WAL permits only one writer at a time
+regardless of how many connections exist, so a large pool would only waste file
+handles.  The default size of four is comfortable for the read-mostly workload
+``MemoryGraph`` produces while leaving headroom for concurrent readers.
 """
 
 from __future__ import annotations
 
-import contextlib
 import queue
 import sqlite3
 import threading
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 
+__all__ = ["ConnectionPoolClosedError", "SQLiteConnectionPool"]
+
+# Default number of connections kept in the pool.  WAL allows a single writer regardless of pool size, so this is small on purpose.
 DEFAULT_POOL_SIZE = 4
 
+# Default number of seconds :meth:`SQLiteConnectionPool.checkout` waits for a free connection before giving up.
+# Mirrors the SQLite ``busy_timeout`` used elsewhere so legitimate contention waits, while a genuine exhaustion surfaces as an error instead of hanging forever.
+DEFAULT_CHECKOUT_TIMEOUT = 30.0
 
-class ConnectionPool:
-    """A bounded, thread-safe pool of pre-configured SQLite connections."""
 
-    def __init__(self, factory: Callable[[], sqlite3.Connection], *, size: int = DEFAULT_POOL_SIZE) -> None:
+class ConnectionPoolClosedError(RuntimeError):
+    """Raised when a connection is requested from a pool that is closed."""
+
+
+class SQLiteConnectionPool:
+    """A bounded, thread-safe pool of pre-configured SQLite connections.
+
+    Args:
+        connection_factory: A zero-argument callable that returns a fully
+            configured :class:`sqlite3.Connection` (``row_factory`` set and all
+            ``PRAGMA`` statements applied).  The factory is invoked exactly
+            ``size`` times when the pool is constructed, so the per-connection
+            ``PRAGMA`` cost is paid once up front rather than on every checkout.
+        size: Number of connections to pre-create.  Must be at least 1.
+        checkout_timeout: Seconds to wait for a free connection before raising
+            :class:`TimeoutError`.  ``None`` waits indefinitely.
+
+    Thread safety:
+        The idle connections live in a :class:`queue.LifoQueue`, whose ``get``
+        and ``put`` operations are individually atomic.  Checkout removes a
+        connection from the queue (blocking if all are in use) and the context
+        manager returns it on exit, so the number of connections handed out
+        never exceeds ``size``.  A LIFO queue is used so a small set of "warm"
+        connections is reused preferentially.  A separate lock guards the
+        one-shot :meth:`close` transition.
+    """
+
+    def __init__(
+        self,
+        connection_factory: Callable[[], sqlite3.Connection],
+        *,
+        size: int = DEFAULT_POOL_SIZE,
+        checkout_timeout: float | None = DEFAULT_CHECKOUT_TIMEOUT,
+    ) -> None:
         if size < 1:
             raise ValueError("Connection pool size must be at least 1.")
-        self._factory = factory
+        self._factory = connection_factory
         self._size = size
-        self._idle: queue.Queue[sqlite3.Connection] = queue.Queue(maxsize=size)
-        self._lock = threading.Lock()
+        self._checkout_timeout = checkout_timeout
+        self._idle: queue.LifoQueue[sqlite3.Connection] = queue.LifoQueue(maxsize=size)
+        # Keep a reference to every connection we created so close() can shut
+        # them all down even if some are currently checked out.
+        self._all_connections: list[sqlite3.Connection] = []
+        self._close_lock = threading.Lock()
         self._closed = False
-        self._created = 0
-        # Pre-create the connections eagerly so the PRAGMA setup happens once,
-        # up front, rather than on the first checkout.
-        for _ in range(size):
-            self._idle.put_nowait(self._new_connection())
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+        for _ in range(size):
+            connection = self._factory()
+            self._all_connections.append(connection)
+            self._idle.put(connection)
+
+    @property
+    def size(self) -> int:
+        """The fixed number of connections managed by the pool."""
+        return self._size
+
+    @property
+    def closed(self) -> bool:
+        """Whether :meth:`close` has been called."""
+        return self._closed
+
+    def available(self) -> int:
+        """Approximate number of connections currently idle in the pool.
+
+        Intended for tests and introspection.  The value is a snapshot and may
+        be stale the instant it is read in a concurrent setting.
+        """
+        return self._idle.qsize()
 
     @contextmanager
     def checkout(self) -> Iterator[sqlite3.Connection]:
-        """Borrow a connection for the duration of the ``with`` block.
+        """Borrow a connection, returning it to the pool on exit.
 
-        Commits on success, rolls back on error, and returns the connection to
-        the pool on exit (closing it if it was a temporary overflow connection).
+        The context manager mirrors the transaction semantics of using a
+        :class:`sqlite3.Connection` directly as a context manager: the
+        transaction is committed on a clean exit and rolled back if the body
+        raises.  Unlike the bare connection context manager, the connection is
+        *not* closed afterwards — it is returned to the pool for reuse.
+
+        Raises:
+            ConnectionPoolClosedError: If the pool has been closed.
+            TimeoutError: If no connection becomes available within
+                ``checkout_timeout`` seconds.
         """
         if self._closed:
-            raise RuntimeError("ConnectionPool is closed.")
-
+            raise ConnectionPoolClosedError("Cannot check out a connection from a closed pool.")
         try:
-            connection = self._idle.get_nowait()
-        except queue.Empty:
-            # Pool exhausted by nested or concurrent checkouts — make a
-            # temporary connection so the caller never blocks or deadlocks.
-            connection = self._new_connection()
+            connection = self._idle.get(timeout=self._checkout_timeout)
+        except queue.Empty as exc:  # pragma: no cover - only on genuine exhaustion
+            raise TimeoutError(
+                f"Timed out after {self._checkout_timeout}s waiting for a pooled SQLite connection."
+            ) from exc
 
         try:
             yield connection
         except BaseException:
-            # Roll back and discard: never hand a possibly-poisoned connection
-            # back to the next caller.
-            self._rollback_quietly(connection)
-            self._close_quietly(connection)
+            # Match sqlite3.Connection.__exit__: roll back on error.
+            with suppress(sqlite3.Error):
+                connection.rollback()
             raise
         else:
-            try:
-                connection.commit()
-            except Exception:
-                self._close_quietly(connection)
-                raise
-            self._return_to_pool(connection)
+            # Match sqlite3.Connection.__exit__: commit on success.  Harmless
+            # no-op for read-only work.
+            connection.commit()
+        finally:
+            self._idle.put(connection)
 
     def close(self) -> None:
-        """Close every retained connection. Idempotent."""
-        with self._lock:
+        """Close every pooled connection.  Idempotent and safe to call twice."""
+        with self._close_lock:
             if self._closed:
                 return
             self._closed = True
-        while True:
-            try:
-                connection = self._idle.get_nowait()
-            except queue.Empty:
-                break
-            self._close_quietly(connection)
+            connections = list(self._all_connections)
+            self._all_connections.clear()
 
-    # ------------------------------------------------------------------
-    # Introspection (used by tests)
-    # ------------------------------------------------------------------
+        for connection in connections:
+            with suppress(sqlite3.Error):  # pragma: no cover - defensive
+                connection.close()
 
-    @property
-    def size(self) -> int:
-        """Maximum number of connections the pool retains."""
-        return self._size
+    def __enter__(self) -> SQLiteConnectionPool:
+        return self
 
-    @property
-    def idle_count(self) -> int:
-        """Number of connections currently available for checkout (approximate)."""
-        return self._idle.qsize()
-
-    @property
-    def created_count(self) -> int:
-        """Total connections ever created, including temporary overflow ones."""
-        with self._lock:
-            return self._created
-
-    @property
-    def closed(self) -> bool:
-        return self._closed
-
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
-    def _new_connection(self) -> sqlite3.Connection:
-        connection = self._factory()
-        with self._lock:
-            self._created += 1
-        return connection
-
-    def _return_to_pool(self, connection: sqlite3.Connection) -> None:
-        if self._closed:
-            self._close_quietly(connection)
-            return
-        try:
-            self._idle.put_nowait(connection)
-        except queue.Full:
-            # Retained pool already at capacity — this was an overflow
-            # connection, so close it rather than exceeding the bound.
-            self._close_quietly(connection)
-
-    @staticmethod
-    def _rollback_quietly(connection: sqlite3.Connection) -> None:
-        with contextlib.suppress(Exception):
-            connection.rollback()
-
-    @staticmethod
-    def _close_quietly(connection: sqlite3.Connection) -> None:
-        with contextlib.suppress(Exception):
-            connection.close()
+    def __exit__(self, *_: object) -> None:
+        self.close()

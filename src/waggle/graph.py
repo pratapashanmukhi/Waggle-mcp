@@ -38,7 +38,7 @@ from waggle.abhi import (
     write_abhi_document,
 )
 from waggle.auth import api_key_prefix, generate_api_key, hash_api_key, verify_api_key
-from waggle.connection_pool import DEFAULT_POOL_SIZE, ConnectionPool
+from waggle.connection_pool import DEFAULT_POOL_SIZE, SQLiteConnectionPool
 from waggle.context_bundle import build_context_bundle, build_query_summary, export_context_bundle_files
 from waggle.embeddings import EmbeddingModel
 from waggle.errors import AuthenticationError, ValidationFailure
@@ -854,7 +854,7 @@ class MemoryGraph:
         # after _initialize_database so the one-time WAL bootstrap/migration runs
         # on its own connection first. Pooled connections use
         # check_same_thread=False because graph ops may run on worker threads.
-        self._pool = ConnectionPool(
+        self._pool = SQLiteConnectionPool(
             lambda: self._connect(check_same_thread=False),
             size=DEFAULT_POOL_SIZE,
         )
