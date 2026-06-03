@@ -54,7 +54,6 @@ export class GraphStudioViewProvider implements vscode.WebviewViewProvider {
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="${csp}">
-  <meta http-equiv="refresh" content="0; url=${url}">
   <style>body { margin: 0; }</style>
 </head>
 <body>

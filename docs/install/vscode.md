@@ -11,7 +11,7 @@ Install the Marketplace extension, open a workspace, then run:
 ## Default behavior
 
 - Downloads `waggle-mcp` from [GitHub Releases](https://github.com/Abhigyan-Shekhar/Waggle-mcp/releases) for your platform
-- Starts a local HTTP server (`graph-studio`) when the workspace opens
+- Starts a local HTTP server (`edit-graph`) when the workspace opens
 - Writes `.vscode/mcp.json` for agent MCP over stdio (after you confirm)
 
 ## Manual MCP config

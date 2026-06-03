@@ -5,18 +5,32 @@ export type PlatformAssetKey = "win32-x64" | "darwin-arm64" | "darwin-x64" | "li
 
 const ASSET_MAP_PATH = path.join(__dirname, "..", "scripts", "asset-map.json");
 
-export function platformAssetKey(): PlatformAssetKey {
-  const arch = process.arch === "arm64" ? "arm64" : "x64";
-  if (process.platform === "win32") {
+export function resolvePlatformAssetKey(platform: string, arch: string): PlatformAssetKey {
+  const normalizedArch = arch === "arm64" ? "arm64" : "x64";
+  if (platform === "win32") {
+    if (normalizedArch === "arm64") {
+      throw new Error(
+        "Windows ARM64 is not supported yet. Use waggle.installMethod pipx with waggle.commandPath, or an x64 Windows build."
+      );
+    }
     return "win32-x64";
   }
-  if (process.platform === "darwin") {
-    return arch === "arm64" ? "darwin-arm64" : "darwin-x64";
+  if (platform === "darwin") {
+    return normalizedArch === "arm64" ? "darwin-arm64" : "darwin-x64";
   }
-  if (process.platform === "linux") {
+  if (platform === "linux") {
+    if (normalizedArch === "arm64") {
+      throw new Error(
+        "Linux ARM64 is not supported yet. Use waggle.installMethod pipx with waggle.commandPath, or an x64 Linux build."
+      );
+    }
     return "linux-x64";
   }
-  throw new Error(`Unsupported platform: ${process.platform} ${process.arch}`);
+  throw new Error(`Unsupported platform: ${platform} ${arch}`);
+}
+
+export function platformAssetKey(): PlatformAssetKey {
+  return resolvePlatformAssetKey(process.platform, process.arch);
 }
 
 export function loadAssetMap(): Record<PlatformAssetKey, string> {
@@ -32,4 +46,13 @@ export function assetFileNameForCurrentPlatform(): string {
     throw new Error(`No release binary mapped for ${key}`);
   }
   return name;
+}
+
+export function buildAssetNameToPlatformKeyMap(): Map<string, PlatformAssetKey> {
+  const map = loadAssetMap();
+  const inverse = new Map<string, PlatformAssetKey>();
+  for (const [key, name] of Object.entries(map)) {
+    inverse.set(name, key as PlatformAssetKey);
+  }
+  return inverse;
 }
