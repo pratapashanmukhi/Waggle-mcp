@@ -16,11 +16,19 @@
   "documentation": "https://github.com/Abhigyan-Shekhar/Waggle-mcp/tree/main/docs/install",
   "support": "https://github.com/Abhigyan-Shekhar/Waggle-mcp/issues",
   "icon": "icon.png",
-  "keywords": ["memory", "mcp", "coding-agents", "local-first"],
+  "keywords": [
+    "memory",
+    "mcp",
+    "coding-agents",
+    "local-first"
+  ],
   "license": "Apache-2.0",
   "compatibility": {
     "claude_desktop": ">=0.9.0",
-    "platforms": ["darwin", "win32"],
+    "platforms": [
+      "darwin",
+      "win32"
+    ],
     "runtimes": {
       "python": ">=3.11"
     }

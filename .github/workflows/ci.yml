@@ -32,6 +32,9 @@ jobs:
       - name: Run ruff format check
         run: ruff format --check src/ tests/
 
+      - name: Check version drift
+        run: python scripts/sync_version.py --check
+
   # ── Tests ─────────────────────────────────────────────────────────────────
   test:
     name: Test (Python ${{ matrix.python-version }}, ${{ matrix.os }})

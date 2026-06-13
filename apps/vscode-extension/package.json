@@ -2,7 +2,7 @@
   "name": "waggle-memory",
   "displayName": "Waggle: Local Memory for AI Agents",
   "description": "Local graph memory for coding agents using MCP.",
-  "version": "0.0.2",
+  "version": "0.0.1",
   "publisher": "Abhigyan-Shekhar",
   "license": "Apache-2.0",
   "icon": "icon.png",
@@ -101,13 +101,19 @@
         "waggle.installMethod": {
           "type": "string",
           "default": "pipx",
-          "enum": ["pipx", "binary"],
+          "enum": [
+            "pipx",
+            "binary"
+          ],
           "description": "Preferred install method."
         },
         "waggle.mcpConfigScope": {
           "type": "string",
           "default": "servers",
-          "enum": ["servers", "mcpServers"],
+          "enum": [
+            "servers",
+            "mcpServers"
+          ],
           "description": "Root key to use when writing .vscode/mcp.json."
         }
       }
@@ -116,12 +122,19 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "package": "vsce package"
+    "package": "vsce package",
+    "pretest": "node -e \"const fs = require('fs'); if (!fs.existsSync('test-workspace')) fs.mkdirSync('test-workspace');\" && npm run compile",
+    "test": "vscode-test"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^22.10.2",
+    "@types/sinon": "^21.0.1",
     "@types/vscode": "^1.96.0",
-    "typescript": "^5.7.2",
-    "@vscode/vsce": "^3.2.2"
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^3.0.0",
+    "@vscode/vsce": "^3.2.2",
+    "sinon": "^22.0.0",
+    "typescript": "^5.7.2"
   }
 }

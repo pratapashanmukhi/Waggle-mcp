@@ -71,3 +71,34 @@ def test_graph_ui_bundle_contains_expected_static_assets() -> None:
         + ", ".join(missing)
         + ". Rebuild or restore src/waggle/static/graph before packaging."
     )
+
+
+def test_version_consistency() -> None:
+    import json
+
+    pyproject_text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', pyproject_text)
+    assert match is not None, "Could not find version in pyproject.toml"
+    version = match.group(1)
+
+    # Check vscode-extension package.json
+    vscode_pj = json.loads((ROOT / "apps" / "vscode-extension" / "package.json").read_text(encoding="utf-8"))
+    assert vscode_pj["version"] == version, f"VS Code extension version ({vscode_pj['version']}) does not match pyproject.toml ({version})"
+
+    # Check vscode-extension package-lock.json
+    vscode_pl = json.loads((ROOT / "apps" / "vscode-extension" / "package-lock.json").read_text(encoding="utf-8"))
+    assert vscode_pl["version"] == version
+    assert vscode_pl["packages"][""]["version"] == version
+
+    # Check claude-desktop-extension package.json
+    claude_pj = json.loads((ROOT / "apps" / "mcp" / "claude-desktop-extension" / "package.json").read_text(encoding="utf-8"))
+    assert claude_pj["version"] == version, f"Claude extension version ({claude_pj['version']}) does not match pyproject.toml ({version})"
+
+    # Check claude-desktop-extension package-lock.json
+    claude_pl = json.loads((ROOT / "apps" / "mcp" / "claude-desktop-extension" / "package-lock.json").read_text(encoding="utf-8"))
+    assert claude_pl["version"] == version
+    assert claude_pl["packages"][""]["version"] == version
+
+    # Check claude-desktop-extension manifest.json
+    claude_manifest = json.loads((ROOT / "apps" / "mcp" / "claude-desktop-extension" / "manifest.json").read_text(encoding="utf-8"))
+    assert claude_manifest["version"] == version, f"Claude manifest version ({claude_manifest['version']}) does not match pyproject.toml ({version})"
