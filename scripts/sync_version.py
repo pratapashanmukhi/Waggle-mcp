@@ -21,6 +21,7 @@ FILES = {
     "apps/mcp/claude-desktop-extension/manifest.json": "json",
 }
 
+
 def read_toml_version(path: Path) -> str:
     content = path.read_text(encoding="utf-8")
     match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', content)
@@ -28,40 +29,50 @@ def read_toml_version(path: Path) -> str:
         raise ValueError(f"Could not find version in {path}")
     return match.group(1)
 
-def write_toml_version(path: Path, version: str) -> None:
+
+def get_toml_new_content(path: Path, version: str) -> str:
     content = path.read_text(encoding="utf-8")
     new_content, count = re.subn(r'(?m)^version\s*=\s*"[^"]+"', f'version = "{version}"', content)
     if count == 0:
         raise ValueError(f"Could not find version line to replace in {path}")
-    path.write_text(new_content, encoding="utf-8")
+    return new_content
+
 
 def read_json_version(path: Path) -> str:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     return data["version"]
 
-def write_json_version(path: Path, version: str) -> None:
+
+def get_json_new_content(path: Path, version: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     data["version"] = version
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-        f.write("\n")
+    return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
 
 def read_json_lock_version(path: Path) -> str:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return data["version"]
+    root_version = data.get("version")
+    packages = data.get("packages", {})
+    pkg_version = packages.get("", {}).get("version") if isinstance(packages, dict) else None
 
-def write_json_lock_version(path: Path, version: str) -> None:
+    if root_version != pkg_version:
+        raise ValueError(
+            f"Internal version mismatch in {path}: root version is '{root_version}' but packages[''] version is '{pkg_version}'"
+        )
+    return root_version
+
+
+def get_json_lock_new_content(path: Path, version: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     data["version"] = version
     if "packages" in data and "" in data["packages"]:
         data["packages"][""]["version"] = version
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-        f.write("\n")
+    return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
 
 def read_version(rel_path: str, file_type: str) -> str:
     path = REPO_ROOT / rel_path
@@ -76,23 +87,25 @@ def read_version(rel_path: str, file_type: str) -> str:
     else:
         raise ValueError(f"Unknown file type: {file_type}")
 
-def write_version(rel_path: str, file_type: str, version: str) -> None:
+
+def prepare_new_content(rel_path: str, file_type: str, version: str) -> str:
     path = REPO_ROOT / rel_path
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
     if file_type == "toml":
-        write_toml_version(path, version)
+        return get_toml_new_content(path, version)
     elif file_type == "json":
-        write_json_version(path, version)
+        return get_json_new_content(path, version)
     elif file_type == "json_lock":
-        write_json_lock_version(path, version)
+        return get_json_lock_new_content(path, version)
     else:
         raise ValueError(f"Unknown file type: {file_type}")
+
 
 def check_versions() -> bool:
     versions = {}
     has_error = False
-    
+
     for rel_path, file_type in FILES.items():
         try:
             version = read_version(rel_path, file_type)
@@ -100,19 +113,20 @@ def check_versions() -> bool:
         except Exception as e:
             print(f"Error reading {rel_path}: {e}")
             has_error = True
-            
+
     if has_error:
         return False
-        
+
     unique_versions = set(versions.values())
     if len(unique_versions) > 1:
         print("Mismatched versions found:")
         for rel_path, version in versions.items():
             print(f"  {rel_path}: {version}")
         return False
-        
+
     print(f"All files are in sync at version: {list(unique_versions)[0]}")
     return True
+
 
 def sync_versions(target_version: str = None) -> bool:
     if target_version is None:
@@ -122,26 +136,43 @@ def sync_versions(target_version: str = None) -> bool:
         except Exception as e:
             print(f"Error reading pyproject.toml: {e}")
             return False
-            
-    print(f"Syncing all files to version: {target_version}")
+
+    # Prepare all new contents in memory first to prevent partial/non-atomic updates
+    prepared_updates = {}
     for rel_path, file_type in FILES.items():
         try:
-            write_version(rel_path, file_type, target_version)
+            new_content = prepare_new_content(rel_path, file_type, target_version)
+            prepared_updates[rel_path] = new_content
+        except Exception as e:
+            print(f"Error preparing version update for {rel_path}: {e}")
+            return False
+
+    # Atomic write-out
+    print(f"Syncing all files to version: {target_version}")
+    for rel_path, new_content in prepared_updates.items():
+        try:
+            (REPO_ROOT / rel_path).write_text(new_content, encoding="utf-8")
             print(f"  Updated {rel_path}")
         except Exception as e:
             print(f"Error writing to {rel_path}: {e}")
             return False
-            
+
     return True
+
 
 def main():
     parser = argparse.ArgumentParser(description="Sync or check versions across configuration manifests.")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--check", action="store_true", help="Check that all manifest versions are identical.")
-    group.add_argument("--sync", nargs="?", const="", help="Sync versions. If a version is provided, syncs to that. If empty, syncs other files to pyproject.toml version.")
-    
+    group.add_argument(
+        "--sync",
+        nargs="?",
+        const="",
+        help="Sync versions. If a version is provided, syncs to that. If empty, syncs other files to pyproject.toml version.",
+    )
+
     args = parser.parse_args()
-    
+
     if args.check:
         if not check_versions():
             sys.exit(1)
@@ -149,6 +180,7 @@ def main():
         target = args.sync if args.sync != "" else None
         if not sync_versions(target):
             sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

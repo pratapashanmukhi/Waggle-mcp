@@ -83,7 +83,9 @@ def test_version_consistency() -> None:
 
     # Check vscode-extension package.json
     vscode_pj = json.loads((ROOT / "apps" / "vscode-extension" / "package.json").read_text(encoding="utf-8"))
-    assert vscode_pj["version"] == version, f"VS Code extension version ({vscode_pj['version']}) does not match pyproject.toml ({version})"
+    assert vscode_pj["version"] == version, (
+        f"VS Code extension version ({vscode_pj['version']}) does not match pyproject.toml ({version})"
+    )
 
     # Check vscode-extension package-lock.json
     vscode_pl = json.loads((ROOT / "apps" / "vscode-extension" / "package-lock.json").read_text(encoding="utf-8"))
@@ -91,14 +93,24 @@ def test_version_consistency() -> None:
     assert vscode_pl["packages"][""]["version"] == version
 
     # Check claude-desktop-extension package.json
-    claude_pj = json.loads((ROOT / "apps" / "mcp" / "claude-desktop-extension" / "package.json").read_text(encoding="utf-8"))
-    assert claude_pj["version"] == version, f"Claude extension version ({claude_pj['version']}) does not match pyproject.toml ({version})"
+    claude_pj = json.loads(
+        (ROOT / "apps" / "mcp" / "claude-desktop-extension" / "package.json").read_text(encoding="utf-8")
+    )
+    assert claude_pj["version"] == version, (
+        f"Claude extension version ({claude_pj['version']}) does not match pyproject.toml ({version})"
+    )
 
     # Check claude-desktop-extension package-lock.json
-    claude_pl = json.loads((ROOT / "apps" / "mcp" / "claude-desktop-extension" / "package-lock.json").read_text(encoding="utf-8"))
+    claude_pl = json.loads(
+        (ROOT / "apps" / "mcp" / "claude-desktop-extension" / "package-lock.json").read_text(encoding="utf-8")
+    )
     assert claude_pl["version"] == version
     assert claude_pl["packages"][""]["version"] == version
 
     # Check claude-desktop-extension manifest.json
-    claude_manifest = json.loads((ROOT / "apps" / "mcp" / "claude-desktop-extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert claude_manifest["version"] == version, f"Claude manifest version ({claude_manifest['version']}) does not match pyproject.toml ({version})"
+    claude_manifest = json.loads(
+        (ROOT / "apps" / "mcp" / "claude-desktop-extension" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert claude_manifest["version"] == version, (
+        f"Claude manifest version ({claude_manifest['version']}) does not match pyproject.toml ({version})"
+    )
