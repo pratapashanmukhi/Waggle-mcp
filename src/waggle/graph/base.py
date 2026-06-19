@@ -14,7 +14,7 @@ from typing import Any
 
 from waggle.embeddings import EmbeddingModel
 from waggle.intelligence import normalize_text
-from waggle.models import Node
+from waggle.models import EvidenceRecord, Node
 
 LOGGER = logging.getLogger(__name__)
 
@@ -357,3 +357,11 @@ def _scope_matches(node: Node, *, agent_id: str = "", project: str = "", session
 
 def _retrieval_session_scope(*, agent_id: str = "", project: str = "", session_id: str = "") -> str:
     return session_id
+
+
+def _encode_evidence_records(records: list[EvidenceRecord]) -> str:
+    return json.dumps([record.model_dump(mode="json") for record in records], sort_keys=True)
+
+
+def _merge_scope_value(existing: str, incoming: str) -> str:
+    return existing.strip() or incoming.strip()
