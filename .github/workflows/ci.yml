@@ -127,9 +127,11 @@ jobs:
 
       - name: Compile extension
         run: npm run compile
-
       - name: Run command validation
-        run: npm test
+        run: node scripts/validate-commands.js
+
+      - name: Run extension integration tests
+        run: xvfb-run npm test
 
   graph-studio:
     name: Graph Studio validation

@@ -75,6 +75,11 @@ describe("Waggle VS Code Extension Integration Tests", () => {
       call.args[0] === "waggle-mcp" && call.args[1] && call.args[1][0] === "--version"
     );
     assert.ok(versionCall, "Should attempt to check waggle-mcp version");
+
+    // Verify the status was set to "not-installed"
+    const api = extension.exports as any;
+    assert.ok(api && typeof api.getState === "function", "Extension should export an API with getState");
+    assert.strictEqual(api.getState().status, "not-installed", "Extension status should be 'not-installed'");
   });
 
   // Test 2: Onboarding flow (enable workspace and write mcp.json)
@@ -116,6 +121,16 @@ describe("Waggle VS Code Extension Integration Tests", () => {
     assert.ok(parsed.servers && parsed.servers.waggle, "mcp.json should contain the waggle server config");
     assert.strictEqual(parsed.servers.waggle.type, "stdio");
     assert.strictEqual(parsed.servers.waggle.command, "waggle-mcp");
+    assert.deepStrictEqual(parsed.servers.waggle.args, ["serve", "--transport", "stdio"]);
+    assert.ok(parsed.servers.waggle.env, "env block should exist");
+    assert.strictEqual(parsed.servers.waggle.env.WAGGLE_DEFAULT_TENANT_ID, "test-workspace");
+    assert.strictEqual(parsed.servers.waggle.env.WAGGLE_DB_PATH, "~/.waggle/waggle.db");
+
+    // Verify state status is updated to connected
+    const extension = vscode.extensions.getExtension("Abhigyan-Shekhar.waggle-memory");
+    assert.ok(extension, "Extension should be found");
+    const api = extension.exports as any;
+    assert.strictEqual(api.getState().status, "connected", "Extension status should be 'connected' after onboarding");
   });
 
   // Test 3: Doctor invocation
