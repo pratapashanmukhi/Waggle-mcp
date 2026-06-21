@@ -49,7 +49,7 @@ export function activate(context: vscode.ExtensionContext): WaggleExtensionApi {
   void maybePromptInstall(ctx);
 
   return {
-    getState: () => state,
+    getState: () => ({ ...state }),
   };
 }
 
