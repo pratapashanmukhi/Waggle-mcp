@@ -44,7 +44,7 @@ Status:
 - Suggested labels: `good first issue`, `enhancement`, `tooling`
 
 Status:
-- Implemented in `src/waggle/server.py` by adding the `--json` flag to `_run_doctor`.
+- Implemented in `src/waggle/server.py` by adding the `--json` flag to the doctor CLI parser and threading it through `json_output`.
 - Guarded by JSON output tests in `tests/test_server.py`.
 - Documented in `docs/reference.md`.
 
