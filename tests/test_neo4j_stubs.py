@@ -226,27 +226,73 @@ def test_neo4j_for_tenant_returns_new_instance() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Note: Known Neo4j gaps
+# Signature contract for previously trapped methods
 # ---------------------------------------------------------------------------
-#
-# The following methods are defined in `src/waggle/neo4j_graph.py` but are
-# NOT accessible on `Neo4jMemoryGraph` instances because they appear inside
-# a module-level `def update_node(...)` function (line 1867) that is never
-# called and whose body (lines 1959-4277) is dead code.  These methods
-# cannot be tested without first fixing the indentation:
-#
-#   - delete_node        (line 2069)
-#   - update_edge        (line 1959)
-#   - delete_edge        (line 2034)
-#   - list_recent_nodes  (line 2084)
-#   - list_context_scopes(line 2110)
-#   - get_stats          (line 2125)
-#   - list_transcript_records  (line 3375)
-#   - search_transcript_records(line 3407)
-#
-# Additionally, `add_node` and `add_edge` *are* accessible on the class but
-# internally call private helpers (`_find_duplicate_node`, `_require_node`,
-# `_fetch_node`, `_node_create_params`, `_node_from_props`,
-# `_register_conflicts`, `_find_existing_edge`) that are also trapped in
-# the same dead-code region.  These methods cannot execute without fixing
-# the indentation first.
+
+
+def test_neo4j_update_node_signature() -> None:
+    sig = inspect.signature(Neo4jMemoryGraph.update_node)
+    assert "node_id" in sig.parameters
+    assert "content" in sig.parameters
+    assert "label" in sig.parameters
+    assert "tags" in sig.parameters
+    assert "agent_id" in sig.parameters
+    assert "project" in sig.parameters
+    assert "session_id" in sig.parameters
+    assert "valid_from" in sig.parameters
+    assert "valid_to" in sig.parameters
+    assert "evidence_records" in sig.parameters
+
+
+def test_neo4j_delete_node_signature() -> None:
+    sig = inspect.signature(Neo4jMemoryGraph.delete_node)
+    assert "node_id" in sig.parameters
+
+
+def test_neo4j_update_edge_signature() -> None:
+    sig = inspect.signature(Neo4jMemoryGraph.update_edge)
+    assert "edge_id" in sig.parameters
+    assert "source_id" in sig.parameters
+    assert "target_id" in sig.parameters
+    assert "relationship" in sig.parameters
+    assert "weight" in sig.parameters
+    assert "metadata" in sig.parameters
+
+
+def test_neo4j_delete_edge_signature() -> None:
+    sig = inspect.signature(Neo4jMemoryGraph.delete_edge)
+    assert "edge_id" in sig.parameters
+
+
+def test_neo4j_list_recent_nodes_signature() -> None:
+    sig = inspect.signature(Neo4jMemoryGraph.list_recent_nodes)
+    assert "limit" in sig.parameters
+    assert "agent_id" in sig.parameters
+    assert "project" in sig.parameters
+    assert "session_id" in sig.parameters
+
+
+def test_neo4j_list_context_scopes_signature() -> None:
+    inspect.signature(Neo4jMemoryGraph.list_context_scopes)
+
+
+def test_neo4j_get_stats_signature() -> None:
+    inspect.signature(Neo4jMemoryGraph.get_stats)
+
+
+def test_neo4j_list_transcript_records_signature() -> None:
+    sig = inspect.signature(Neo4jMemoryGraph.list_transcript_records)
+    assert "agent_id" in sig.parameters
+    assert "project" in sig.parameters
+    assert "session_id" in sig.parameters
+    assert "limit" in sig.parameters
+    assert "offset" in sig.parameters
+
+
+def test_neo4j_search_transcript_records_signature() -> None:
+    sig = inspect.signature(Neo4jMemoryGraph.search_transcript_records)
+    assert "query" in sig.parameters
+    assert "agent_id" in sig.parameters
+    assert "project" in sig.parameters
+    assert "session_id" in sig.parameters
+    assert "limit" in sig.parameters

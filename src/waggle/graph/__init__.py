@@ -99,6 +99,7 @@ from .base import (
 )
 from .base import (
     MemoryGraphBase,
+    _decode_evidence_records,
     _decode_metadata,
     _encode_evidence_records,
     _encode_metadata,
@@ -376,22 +377,6 @@ CREATE INDEX IF NOT EXISTS idx_audit_events_tenant_type ON audit_events(tenant_i
 CREATE INDEX IF NOT EXISTS idx_audit_events_tenant_actor ON audit_events(tenant_id, actor_id);
 CREATE INDEX IF NOT EXISTS idx_audit_events_tenant_resource ON audit_events(tenant_id, resource_id);
 """
-
-
-def _decode_evidence_records(raw: Any) -> list[EvidenceRecord]:
-    if raw in (None, ""):
-        return []
-    if isinstance(raw, list):
-        return [EvidenceRecord.model_validate(item) for item in raw]
-    if isinstance(raw, str):
-        try:
-            decoded = json.loads(raw)
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(decoded, list):
-            return []
-        return [EvidenceRecord.model_validate(item) for item in decoded]
-    return []
 
 
 class _ReadWriteLock:
