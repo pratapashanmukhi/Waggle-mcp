@@ -485,3 +485,22 @@ def test_invalid_upload_options_are_rejected(
             credentials=MagicMock(),
             resumable_threshold_bytes=-1,
         )
+
+
+def test_invalid_resumable_chunk_size_alignment_is_rejected(
+    tmp_path: Path,
+) -> None:
+    upload_path = tmp_path / "misaligned.abhi"
+    upload_path.write_bytes(b"misaligned")
+
+    with pytest.raises(
+        ValueError,
+        match="chunk_size must be a multiple of 256 KiB",
+    ):
+        drive_sync.push_file_to_drive(
+            local_path=upload_path,
+            folder_id="",
+            credentials=MagicMock(),
+            chunk_size=1000,
+            resumable_threshold_bytes=1,
+        )

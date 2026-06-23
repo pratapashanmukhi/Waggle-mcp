@@ -34,6 +34,7 @@ LOGGER = logging.getLogger(__name__)
 
 RESUMABLE_UPLOAD_THRESHOLD_BYTES = 5 * 1024 * 1024
 RESUMABLE_UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
+GOOGLE_DRIVE_RESUMABLE_CHUNK_ALIGNMENT_BYTES = 256 * 1024
 DEFAULT_UPLOAD_RETRIES = 3
 
 
@@ -135,6 +136,9 @@ def push_file_to_drive(
 
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive.")
+
+    if chunk_size % GOOGLE_DRIVE_RESUMABLE_CHUNK_ALIGNMENT_BYTES != 0:
+        raise ValueError("chunk_size must be a multiple of 256 KiB for resumable uploads.")
 
     if max_retries < 0:
         raise ValueError("max_retries cannot be negative.")
