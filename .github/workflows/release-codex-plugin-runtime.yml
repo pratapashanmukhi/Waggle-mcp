@@ -95,7 +95,7 @@ jobs:
         run: python scripts/build_codex_plugin_runtime.py --probe --verify-signatures
 
       - name: Upload runtime artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: codex-plugin-runtime-${{ matrix.target }}
           path: plugins/waggle/runtime/${{ matrix.target }}/
@@ -145,7 +145,7 @@ jobs:
             --output-dir dist/codex-plugin
 
       - name: Upload Codex plugin bundle artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: waggle-codex-plugin-bundles
           path: dist/codex-plugin/*
