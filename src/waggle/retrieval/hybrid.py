@@ -350,7 +350,9 @@ class HybridRetriever:
             ],
         }
 
-    def _load_turn_pairs(self, *, project: str, agent_id: str, session_id: str, connection: sqlite3.Connection) -> list[TurnPairCandidate]:
+    def _load_turn_pairs(
+        self, *, project: str, agent_id: str, session_id: str, connection: sqlite3.Connection
+    ) -> list[TurnPairCandidate]:
         filters = ["tenant_id = ?"]
         params: list[Any] = [self.graph.tenant_id]
         if project.strip():
@@ -431,7 +433,13 @@ class HybridRetriever:
         return ranked
 
     def _rank_nodes(
-        self, query_embedding: np.ndarray, *, project: str, agent_id: str, session_id: str, connection: sqlite3.Connection
+        self,
+        query_embedding: np.ndarray,
+        *,
+        project: str,
+        agent_id: str,
+        session_id: str,
+        connection: sqlite3.Connection,
     ) -> list[CandidateMemory]:
         filters = ["tenant_id = ?", "embedding IS NOT NULL"]
         params: list[Any] = [self.graph.tenant_id]
