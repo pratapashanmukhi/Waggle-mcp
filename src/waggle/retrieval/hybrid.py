@@ -4,7 +4,6 @@ import json
 import math
 import os
 import sqlite3
-import threading
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
