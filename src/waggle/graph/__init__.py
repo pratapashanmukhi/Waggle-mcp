@@ -538,6 +538,7 @@ class MemoryGraph(TranscriptMixin, TraversalMixin, MutationMixin, MemoryGraphBas
         # it (like they share the lock) and must not close it out from under us.
         self._owns_pool = True
         self._lexical_cache = None
+        self._lexical_cache_lock = threading.Lock()
 
     @property
     def root_graph(self) -> MemoryGraph:
